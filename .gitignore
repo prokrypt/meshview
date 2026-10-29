@@ -5,3 +5,11 @@ packets.db
 /table_details.py
 config.ini
 screenshots/*
+*.log
+*.log.*
+*.before-*
+*.bak
+*.pybak
+*.new
+.mypy_cache/
+proto_def/meshtastic_bak/

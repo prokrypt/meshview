@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 
 {% block head %}
-    <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
 {% endblock %}
 
 {% block css %}
 #mynetwork {
     width: 100%;
-    height: 100vh;
-    max-width: 2000px;
-    max-height: 2000px;
+    height: 85vh;
+    max-width: 3000px;
+    max-height: 3000px;
     border: 1px solid lightgray;
     background-color: white;
 }
@@ -45,10 +45,19 @@
 {% block body %}
 <div style="position: absolute; top: 10px; left: 10px; z-index: 10;">
     <input type="text" id="node-search" placeholder="Search node..."
-           style="padding: 5px; border-radius: 5px; border: 1px solid #ccc;">
+           style="padding: 5px; border-radius: 5px; border: 1px solid #ccc;"
+           onkeydown="if(event.key === 'Enter') searchNode()">
     <button onclick="searchNode()"
             style="padding: 5px 10px; margin-left: 5px; border-radius: 5px; border: 1px solid #ccc; background-color: #3388ff; color: white;">
         Search
+    </button>
+</div>
+
+<div style="position: absolute; top: 80px; right: 10px; z-index: 10;">
+    <button onclick="chart.resize()"
+            style="padding: 5px 10px; border-radius: 5px; border: 1px solid #ccc; background-color: #3388ff; color: white;"
+            title="Drehen!">
+        ↻
     </button>
 </div>
 
@@ -57,6 +66,9 @@
 <!-- Legend -->
 <div class="legend">
     <div><span style="background-color: #ff5733; width: 20px; height: 20px; display: inline-block; border-radius: 50%; margin-right: 5px;"></span> Traceroute</div>
+    {% if edges | selectattr('edgeType', 'equalto', 'traceroute_back') | first %}
+    <div><span style="background-color: #8e44ad; width: 20px; height: 20px; display: inline-block; border-radius: 50%; margin-right: 5px;"></span> Traceroute (only seen on the way back)</div>
+    {% endif %}
     <div><span style="background-color: #3388ff; width: 20px; height: 20px; display: inline-block; border-radius: 50%; margin-right: 5px;"></span> NeighborInfo</div>
 </div>
 
@@ -65,66 +77,187 @@
     <b>Long Name: </b> <span id="node-long-name"></span></br>
     <b>Short Name: </b><span id="node-short-name"></span></br>
     <b>Role: </b><span id="node-role"></span></br>
-    <b>Hardware Model: </b><span id="node-hw-model"></span>
+    <b>Hardware Model: </b><span id="node-hw-model"></span></br>
+    <b>Links: </b><span id="node-links"></span>
 </div>
 
+
+<script id="graph-nodes" type="application/json">{{ nodes|graph_nodes|tojson }}</script>
+<script id="graph-edges" type="application/json">{{ edges|graph_edges|tojson }}</script>
 <script type="text/javascript">
+
+// SPINNERS
+
+const controlsContainer = document.createElement('div');
+controlsContainer.style.position = "fixed";
+controlsContainer.style.bottom = "10px";
+controlsContainer.style.left = "23%";
+controlsContainer.style.zIndex = "999";
+controlsContainer.style.color = "black";
+controlsContainer.style.background = "white";
+controlsContainer.style.padding = "10px";
+controlsContainer.style.display = "none"; // Initially hidden
+
+controlsContainer.innerHTML = `
+    <label>Repulsion: <input type="number" id="repulsion" value="500" step="10" style="width: 70px;" min="0"></label>
+    <label>Gravity: <input type="number" id="gravity" value="0.05" step="0.01" min="0" max="1"></label>
+    <label>Edge Length: <input type="number" id="edgeLengthMin" value="100" step="5" style="width: 70px;" min="10"></label>
+    <label><input type="number" id="edgeLengthMax" value="200" step="5" style="width: 70px;" min="10"></label>
+`;
+
+document.body.appendChild(controlsContainer);
+
+// Create the toggle button
+const toggleButton = document.createElement('button');
+toggleButton.innerHTML = ">>";
+toggleButton.style.color = "black"
+toggleButton.style.position = "fixed";
+toggleButton.style.bottom = "10px";
+toggleButton.style.left = "20%";
+toggleButton.style.zIndex = "1000";
+toggleButton.style.background = "white";
+toggleButton.style.padding = "5px";
+toggleButton.style.cursor = "pointer";
+
+// Toggle visibility on click
+toggleButton.addEventListener('click', () => {
+    if (controlsContainer.style.display === "none") {
+        controlsContainer.style.display = "block";
+    } else {
+        controlsContainer.style.display = "none";
+    }
+});
+
+document.body.appendChild(toggleButton);
+
+	// Function to apply the new settings
+	function updateForce() {
+	    const repulsion = parseInt(document.getElementById('repulsion').value, 10);
+	    const gravity = parseFloat(document.getElementById('gravity').value);
+	    const edgeLengthMin = parseInt(document.getElementById('edgeLengthMin').value, 10);
+	    const edgeLengthMax = parseInt(document.getElementById('edgeLengthMax').value, 10);
+
+	    chart.setOption({
+	        series: [{
+	            force: {
+	                repulsion: repulsion,
+	                gravity: gravity,
+	                edgeLength: [edgeLengthMin, edgeLengthMax]
+	            }
+	        }]
+	    });
+	}
+
+
+	// Live update on input change
+	['repulsion', 'gravity', 'edgeLengthMin', 'edgeLengthMax'].forEach(id => {
+	    const el = document.getElementById(id);
+
+		let to
+
+	    // Update on input change
+	    el.addEventListener('input', (e) => {
+	    	clearTimeout(to);
+	    	to=setTimeout(()=>{updateForce()},500);
+	    });
+
+	    // Change value on mouse wheel
+	    el.addEventListener('wheel', (e) => {
+	        e.preventDefault();
+
+	        let step = parseFloat(el.step) || 1;
+	        let value = parseFloat(el.value) || 0;
+	        let min = parseFloat(el.min);
+	        let max = parseFloat(el.max);
+
+	        if (e.deltaY < 0) {
+	            value += step; // Scroll up → Increase value
+	        } else {
+	            value -= step; // Scroll down → Decrease value
+	        }
+
+	        // Enforce min/max boundaries
+	        if (!isNaN(min)) value = Math.max(value, min);
+	        if (!isNaN(max)) value = Math.min(value, max);
+
+	        el.value = Math.round(value*100)/100;
+	        clearTimeout(to);
+	        to=setTimeout(()=>{updateForce()},200);
+	    });
+	});
+
+// End spinners
+
     // Initialize chart
-    var chart = echarts.init(document.getElementById('mynetwork'));
+    // Canvas: SVG with hundreds of image nodes is very slow on weak machines
+    var chart = echarts.init(document.getElementById('mynetwork'),null,{renderer: 'canvas'});
 
-    var nodes = [
-    {% for node in nodes %}
-        {
-            name: `{{ node.node_id }}`,
-            value: `{{ node.long_name | tojson }}`,
-            symbol: 'rect',
-            symbolSize: [5, 5],
-            label: {
-                show: true,
-                position: 'inside',
-                color: '#000',
-                padding: [5, 10],
-                formatter: function(params) {
-                    // Remove quotes around the long_name
-                    return params.data.value.replace(/^"(.*)"$/, '$1'); // Remove surrounding quotes
-                },
-                backgroundColor: '#f0f0f0',
-                borderColor: '#999',
-                borderWidth: 1,
-                borderRadius: 5
-            },
-            long_name: `{{ node.long_name | tojson }}`,
-            short_name: `{{ node.short_name | tojson }}`,
-            role: `{{ node.role | tojson }}`,
-            hw_model: `{{ node.hw_model | tojson }}`
-        }{% if not loop.last %},{% endif %}
-    {% endfor %}
-    ];
+    var ROUTER_ROLES = ['ROUTER', 'REPEATER', 'ROUTER_LATE'];
+    var ROUTER_ICON = 'image://https://cdn.discordapp.com/emojis/264420069038227456.webp';
+    var CLIENT_ICON = 'image://https://cdn.discordapp.com/emojis/891912298438987817.webp?size=96&animated=false';
 
-    var edges = [
-    {% for edge in edges %}
-        {
-            source: `{{ edge.from }}`,
-            target: `{{ edge.to }}`,
-            originalColor: `{{ edge.originalColor }}`,
-            lineStyle: {
-                color: '#d3d3d3',
-                width: 2,
-                opacity: 0.5
-            }
-        }{% if not loop.last %},{% endif %}
-    {% endfor %}
-    ];
+    // [node_id, long_name, short_name, role, hw_model] and [from, to, color, type, width]
+    var nodes = JSON.parse(document.getElementById('graph-nodes').textContent).map(function (n) {
+        var router = ROUTER_ROLES.includes(n[3]);
+        return {
+            name: String(n[0]),
+            value: n[2] || '',
+            symbolSize: router && n[3] !== 'ROUTER_LATE' ? 32 : 20,
+            symbol: router ? ROUTER_ICON : CLIENT_ICON,
+            long_name: n[1] || '',
+            short_name: n[2] || '',
+            role: n[3] || '',
+            hw_model: n[4] || ''
+        };
+    });
+    var known = new Set(nodes.map(function (n) { return n.name; }));
+
+    // Links to nodes on other channels have nothing to attach to
+    var edges = JSON.parse(document.getElementById('graph-edges').textContent).filter(function (e) {
+        return known.has(String(e[0])) && known.has(String(e[1]));
+    }).map(function (e) {
+        return {
+            source: String(e[0]),
+            target: String(e[1]),
+            originalColor: e[2],
+            edgeType: e[3],
+            lineStyle: { color: e[2], width: e[4], opacity: 1 },
+            tooltip: { show: false }
+        };
+    });
+
+    function linkCounts(name) {
+        var inb = edges.filter(e => e.target === name).length;
+        var outb = edges.filter(e => e.source === name).length;
+        return { inb: inb, outb: outb, text: (inb ? inb + ' in' + (outb ? ', ' : '') : '') + (outb ? outb + ' out' : '') };
+    }
+
+    // Fill the info panel with text nodes only: names come from the radios
+    function showInfo(n) {
+        var link = document.createElement('a');
+        link.href = '/packet_list/' + n.name;
+        link.textContent = n.long_name || n.name;
+        document.getElementById('node-long-name').replaceChildren(link);
+        document.getElementById('node-short-name').innerText = n.short_name;
+        document.getElementById('node-role').innerText = n.role;
+        document.getElementById('node-hw-model').innerText = n.hw_model;
+        document.getElementById('node-links').innerText = linkCounts(n.name).text || 'none';
+    }
 
     var option = {
         backgroundColor: 'white',
         tooltip: {
             formatter: function(params) {
-                return (params.data.long_name || 'Unknown') + ' - ' + (params.data.short_name || 'Unknown');
+                const links = linkCounts(params.data.name).text;
+                return echarts.format.encodeHTML(params.data.long_name || 'Unknown') + (links ? ' (' + links + ')' : '');
             }
         },
-        animationDurationUpdate: 1500,
-        animationEasingUpdate: 'quinticInOut',
+        animationDuration: 1000,
+        animationDurationUpdate: 100,
+        animationDelay: 100,
+        animationDelayUpdate: 10,
+        animationEasing: 'quarticInOut',
+        //animationEasingUpdate: 'elasticOut',
         legend: {
             data: ['Traceroute', 'NeighborInfo'],
             selectedMode: false,
@@ -145,115 +278,213 @@
                 layout: 'force',
                 data: nodes,
                 links: edges,
+                edgeSymbol: ["circle","arrow"],
+                edgeSymbolSize: [4,6],
+                label: {
+                    show: true,
+                    position: "top",
+                    offset: [0,-5],
+                    color: '#000',
+                    padding: [5, 10],
+                    formatter: function(params) { return params.data.value; },
+                    backgroundColor: '#f0f0f0',
+                    borderColor: '#999',
+                    borderWidth: 1,
+                    borderRadius: 5
+                },
                 roam: true,
                 force: {
                     repulsion: 500,
                     edgeLength: [100, 200],
-                    gravity: 0.05
+                    gravity: 0.05,
+                    layoutAnimation: false
                 },
                 lineStyle: {
-                    width: 2,
-                    curveness: 0
-                }
+                	width: 2,
+                   	//curveness: 0.02
+                },
+                selectedMode: 'multiple',
+                emphasis: {
+                	focus: 'adjacency',
+                //	lineStyle: { width: 4 }
+                },
+		        blur: {
+                  itemStyle: { opacity: 0.2 }
+               }
             }
         ]
     };
 
     chart.setOption(option);
 
+	var selectedIndex=null;
+
     // Event listener for node clicks
     chart.on('click', function(params) {
         if (params.dataType === 'node') {
-            var selectedNode = params.data.name;
+        	if (selectedIndex == params.dataIndex){
+			    chart.dispatchAction({
+	     	       type: 'downplay',
+	     	       seriesIndex: 0,
+	     	       dataIndex: null
+		     	});
+		     	selectedIndex=null
+		     	return
+        	}
+			selectedIndex = params.dataIndex
 
-            var updatedEdges = edges.map(edge => {
-                if (edge.source === selectedNode || edge.target === selectedNode) {
-                    return {
-                        ...edge,
-                        lineStyle: {
-                            color: edge.originalColor,
-                            width: 2,
-                            opacity: 1
-                        }
-                    };
-                } else {
-                    return edge;
-                }
-            });
+		    chart.dispatchAction({
+     	       type: 'highlight',
+     	       seriesIndex: 0,
+     	       dataIndex: selectedIndex
+	     	});
 
-            chart.setOption({
-                series: [{ links: updatedEdges }]
-            });
-
-            document.getElementById('node-long-name').innerText = params.data.long_name;
-            document.getElementById('node-short-name').innerText = params.data.short_name;
-            document.getElementById('node-role').innerText = params.data.role;
-            document.getElementById('node-hw-model').innerText = params.data.hw_model;
+            showInfo(params.data);
         }
     });
 
-    function searchNode() {
-        var searchQuery = document.getElementById('node-search').value.toLowerCase().trim();
+	chart.on('mouseout', function(params) {
+		if (selectedIndex===null) return
+	    chart.dispatchAction({
+            type: 'highlight',
+            seriesIndex: 0,
+            dataIndex: selectedIndex
+        });
+	})
 
-        if (!searchQuery) return;
-
-        var foundNode = nodes.find(node =>
-            node.name.toLowerCase().includes(searchQuery) ||
-            node.long_name.toLowerCase().includes(searchQuery) ||
-            node.short_name.toLowerCase().includes(searchQuery)
-        );
-
-        if (foundNode) {
-            // Update the node's label background color to light blue
-            chart.setOption({
-                series: [{
-                    data: nodes.map(node => ({
-                        ...node,
-                        label: {
-                            ...node.label,
-                            backgroundColor: node.name === foundNode.name ? '#add8e6' : node.label.backgroundColor
-                        }
-                    }))
-                }]
-            });
-
-            // Simulate node click behavior
-            var updatedEdges = edges.map(edge => {
-                if (edge.source === foundNode.name || edge.target === foundNode.name) {
-                    return {
-                        ...edge,
-                        lineStyle: {
-                            color: edge.originalColor,
-                            width: 2,
-                            opacity: 1
-                        }
-                    };
-                } else {
-                    return edge;
-                }
-            });
-
-            chart.setOption({
-                series: [{ links: updatedEdges }]
-            });
-
-            // Update the node info panel
-            document.getElementById('node-long-name').innerText = foundNode.long_name;
-            document.getElementById('node-short-name').innerText = foundNode.short_name;
-            document.getElementById('node-role').innerText = foundNode.role;
-            document.getElementById('node-hw-model').innerText = foundNode.hw_model;
-
-            // Recenter the graph on the found node
-            chart.dispatchAction({
-                type: 'moveTo',
-                seriesIndex: 0,
-                dataIndex: nodes.indexOf(foundNode),
-                zoom: 1.5 // Adjust zoom level as needed
-            });
-
-        } else {
-            alert("Node not found!");
+	chart.on('mouseover', function(params) {
+		if (selectedIndex===null) {
+			if (params.dataType === 'edge') {
+			    chart.dispatchAction({
+		            type: 'downplay',
+		            seriesIndex: 0
+		        });
+	        }	
+	        if (params.dataType === 'node') {
+   			    chart.dispatchAction({
+   		            type: 'downplay',
+   		            seriesIndex: 0
+   		        });
+   	        }
+			return
+		}
+		if (params.dataType === 'edge') {
+		    chart.dispatchAction({
+	            type: 'highlight',
+	            seriesIndex: 0,
+	            dataIndex: selectedIndex
+	        });
+	        return
         }
-    }
+
+		selectedname=chart.getOption().series[0].data[selectedIndex].name
+		selectednodeneighbors=edges.filter(link => link.source === selectedname || link.target === selectedname)
+		    .map(link => link.source === selectedname ? link.target : link.source);
+
+		if(!selectednodeneighbors.includes(params.name)){
+			chart.dispatchAction({
+		            type: 'highlight',
+		            seriesIndex: 0,
+		            dataIndex: selectedIndex
+		       });
+		    return
+		}
+	})
+
+
+	let currentMatchIndex = 0; // Keep track of the current match
+	function searchNode() {
+	    var searchQuery = document.getElementById('node-search').value.toLowerCase().trim();
+
+	    if (!searchQuery) return;
+
+	    var foundNodes = nodes.filter(node =>
+	        node.name.toLowerCase().includes(searchQuery) ||
+	        node.long_name.toLowerCase().includes(searchQuery) ||
+	        node.short_name.toLowerCase().includes(searchQuery)
+	    );
+
+	    if (foundNodes.length > 0) {
+	        // Loop through the matches one by one
+	        if (currentMatchIndex >= foundNodes.length) {
+	            currentMatchIndex = 0; // Reset to the first match if we go beyond
+	        }
+
+	        foundNode = foundNodes[currentMatchIndex];
+
+	        // Update the node info panel for the current match
+            showInfo(foundNode);
+
+			selectedIndex=nodes.indexOf(foundNode);
+
+	        chart.dispatchAction({
+	            type: 'highlight',
+	            seriesIndex: 0,
+	            dataIndex: nodes.indexOf(foundNode)
+	        });
+
+/*
+	        chart.dispatchAction({
+	            type: 'dataZoom',
+	            startValue: nodes.indexOf(foundNode),   // Zoom to the clicked node
+	            endValue: nodes.indexOf(foundNode),      // Adjust the zoom scale based on your needs
+	            zoom: 1.5
+	        });
+*/
+
+
+	        // Move to the next match for next search invocation
+	        currentMatchIndex++;
+	    } else {
+	        alert("No node matches. The graph only shows nodes with a link in this time window.");
+	    }
+	}
+
+	// Select search input box on /
+	document.addEventListener("keydown", function(event) {
+	    if (event.key == "/" && document.activeElement.id !== "node-search") {
+	        event.preventDefault();
+	        document.getElementById("node-search").focus();
+	        document.getElementById("node-search").select();
+	    }
+	});
+
+	// Deselect all on escape
+	document.addEventListener('keydown', (event) => {
+	    if (event.key === 'Escape') {
+	    	selectedIndex=null
+	        chart.dispatchAction({
+	            type: 'downplay',
+	            dataIndex: null // Null means apply to all nodes and edges
+	        });
+	    }
+	});
+
+	// Deselect all on empty space click
+	chart.getZr().on('click', function(event) {
+	  if (!event.target) {
+	  	if(selectedIndex===null) return
+ 	    	selectedIndex=null
+	        chart.dispatchAction({
+	            type: 'downplay',
+	            dataIndex: null // Null means apply to all nodes and edges
+	        });
+	  }
+	});
+
+	// Auto resize!
+	let tout
+	window.addEventListener('resize', () => {
+		clearTimeout(tout)
+	    tout=setTimeout(()=>{chart.resize()},500);
+	});
+
+	// /nodegraph/<channel>?node=<node id> (the node page's Network Graph button): start with that node
+	// searched, if it has a link in this time window
+	const startNode = new URLSearchParams(location.search).get('node');
+	if (startNode && nodes.some(n => n.name === startNode)) {
+	    document.getElementById('node-search').value = startNode;
+	    searchNode();
+	}
 </script>
 {% endblock %}

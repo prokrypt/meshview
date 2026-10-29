@@ -1,6 +1,6 @@
 <div class="row chat-packet">
     <span class="col-2 timestamp">{{packet.import_time.strftime('%-I:%M:%S %p - %d-%m-%Y')}} </span>
-    <span class="col-1 timestamp"><a href="/packet/{{packet.id}}">✉️</a> {{packet.from_node.channel}}</span>
+    <span class="col-1 timestamp"><a href="/packet/{{packet.id}}">✉️</a> <a href="/chat/{{packet.from_node.channel or "Unknown"}}">{{packet.from_node.channel or "Unknown"}}</a></span>
     <span class="col-2 username"><a href="/packet_list/{{packet.from_node_id}}">{{packet.from_node.long_name or (packet.from_node_id | node_id_to_hex) }}</a></span>
     <span class="col-6 message">{{packet.payload}}</span>
 </div>

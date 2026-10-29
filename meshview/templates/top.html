@@ -1,10 +1,45 @@
 {% extends "base.html" %}
 {% block css %}
-.table-title {
+		label {
+			color: white;
+		}
+
+		.hours {
+			text-align: center;
+			margin-bottom: 0px;
+			z-index: 1;
+			position: relative;
+		}
+		
+		.hour {
+			display: inline;
+			padding: 4px;
+		}
+		
+		.table-title {
             font-size: 2rem;
             text-align: center;
             margin-bottom: 20px;
         }
+
+        .dataTables_length {
+            display: none;
+        }
+
+		td.child {
+			background-color: #333;
+		}
+
+		.ttb {
+			width: 100%;
+			display: flex;
+			justify-content: center;
+		}
+
+		.tt {
+		   	max-width: 1140px;
+		   	overflow-x: auto;
+		}
 
         .traffic-table {
             width: 60%;
@@ -42,24 +77,81 @@
 {% endblock %}
 
 {% block body %}
-    <h2 class="table-title">Top Traffic Nodes (last 24 hours)</h2>
-    <table class="traffic-table">
-        <thead>
-            <tr>
-                <th>Node Name</th>
-                <th>Role</th>
-                <th>Packet Count</th>
+
+<!-- DataTables CSS -->
+<link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.10.25/css/jquery.dataTables.min.css">
+
+<!-- DataTables jQuery -->
+<script type="text/javascript" charset="utf-8" src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+<!-- DataTables JavaScript -->
+<script type="text/javascript" charset="utf-8" src="https://cdn.datatables.net/1.10.25/js/jquery.dataTables.min.js"></script>
+
+<link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.4.1/css/responsive.dataTables.min.css">
+<script src="https://cdn.datatables.net/responsive/2.4.1/js/dataTables.responsive.min.js"></script>
+
+<div class="ttb">
+<div class="tt">
+<h2 class="table-title">Top Traffic Nodes (last {{ hours }} hour{{ 's' if hours != 1 else '' }})</h2>
+<div class="hours">Hours: {% for number in [1, 2, 4, 8, 12, 24, 48, 72, 96, 168] %}
+    <div class="hour">{{ '[' if hours == number }}<a href="/top/{{ number }}">{{ number }}</a>{{ ']' if hours == number }}</div>
+{% endfor %}</div>
+<table id="traffic-table" class="traffic-table">
+    <thead>
+        <tr>
+            <th data-priority="2">Channel</th>
+            <th data-priority="1">Node Name</th>
+            <th data-priority="5">Role</th>
+            <th data-priority="3">Packet Count</th>
+            <th data-priority="6" title="Not used in any calculations">Hops (🍺)</th>
+            <th data-priority="4" title="Based on gateway hits (minus self-gates)
+Over 100 for idle nodes is generally bad
+Under 80 is ideal
+For shits and giggles only
+">Mesh Impact</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for node in nodes %}
+            <tr class="traffic">
+                <td>{{ node[1] }}</td>
+                <td><a href="/packet_list/{{ node[0] }}">{{ node[2] }}</a></td>
+                <td>{{ node[3] }}</td>
+                <td><a href="/top/{{hours}}?node_id={{ node[0] }}">{{ node[4] }}</a></td>
+                <td>{{ node[5] }}</td>
+				<td>
+	            {% if node[1] == "LongFast" %}
+	                {{ (node[6] * 1.822 / hours) | round | int }}
+	            {% elif node[1] == "MediumFast" %}
+	            	{{ (node[6] * 0.554 / hours) | round | int }}
+	            {% else %}
+	                {{ (node[6] / hours) | round | int }}
+	            {% endif %}
+	            </td>
             </tr>
-        </thead>
-        <tbody>
-            {% for node in nodes %}
-                <tr class="traffic">
-                    <td><a href="/packet_list/{{ node[0] }}">{{ node[1] }}</a></td>  <!-- long_name -->
-                    <td>{{ node[2] }}</td>
-                    <td><a href="/top?node_id={{ node[0] }}">{{ node[3] }}</a></td> <!-- packet_count -->
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+<script>
+    $(document).ready(function() {
+        $('#traffic-table').DataTable({
+        	stateSave: false,
+        	responsive: true,
+        	pageLength: 100,
+        	columnDefs: [{ "orderSequence": ["desc", "asc"], "targets": "_all" }]
+        });
+        $('#traffic-table').DataTable().order([[5, 'desc']]).draw();
+    });
+
+document.addEventListener("keydown", function(event) {
+	if (event.key == "/" || (event.ctrlKey && event.key == "f")) {
+		event.preventDefault();
+		$('#traffic-table_filter input').focus()
+	}
+});
+    
+</script>
 
 {% endblock %}

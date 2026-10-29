@@ -1,81 +1,95 @@
 {% extends "base.html" %}
+
+{% block head %}
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+{% endblock %}
+
 {% block css %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-     crossorigin=""/>
-<style>
-    .legend {
-        background: white;
-        padding: 8px;
-        line-height: 1.5;
-        border-radius: 5px;
-        box-shadow: 0 0 10px rgba(0,0,0,0.3);
-        font-size: 14px;
-        color: black;
-    }
-    .legend i {
-        width: 12px;
-        height: 12px;
-        display: inline-block;
-        margin-right: 6px;
-        border-radius: 50%;
-    }
-    #filter-container {
-        text-align: center;
-        margin-top: 10px;
-    }
-    .filter-checkbox {
-        margin: 0 10px;
-    }
-</style>
+#map {
+    width: 100%;
+    height: 600px;
+}
+
+#filter-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px 18px;
+    margin-top: 10px;
+}
+
+#filter-container label {
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+#filter-container .dot {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 1px solid #fff;
+    margin: 0 4px 0 2px;
+    vertical-align: -1px;
+}
+
+#filter-container .count {
+    color: #8b929a;
+}
+
+#filter-container select {
+    padding: 3px 8px;
+    border: 1px solid #2c3036;
+    border-radius: 4px;
+    background: #1a1d21;
+    color: inherit;
+}
 {% endblock %}
 
 {% block body %}
-<div id="map" style="width: 100%; height: 600px;"></div>
+<div id="map"></div>
 
 <div id="filter-container">
-    <input type="checkbox" class="filter-checkbox" id="filter-longfast" checked> LongFast
-    <input type="checkbox" class="filter-checkbox" id="filter-mediumslow" checked> MediumSlow
-    <input type="checkbox" class="filter-checkbox" id="filter-router-longfast" checked> LongFast Routers
-    <input type="checkbox" class="filter-checkbox" id="filter-router-mediumslow" checked> MediumSlow Routers
+    <span id="channel-filters"></span>
+    <label><input type="checkbox" id="show-clients" checked> Clients</label>
+    <label><input type="checkbox" id="show-routers" checked> Routers</label>
+    <select id="heard" aria-label="Last heard">
+        <option value="0">Heard any time</option>
+        <option value="24">Heard in the last 24h</option>
+        <option value="168">Heard in the last 7 days</option>
+        <option value="720">Heard in the last 30 days</option>
+    </select>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-     crossorigin=""></script>
-
+<script id="node-data" type="application/json">{{ rows|tojson }}</script>
 <script>
-    var map = L.map('map');
+    // Row layout from web.py node_rows(): node_id, id, long_name, short_name, hw_model, role,
+    // channel, firmware, lat, lon, last heard (epoch s)
+    var NODE_ID = 0, ID = 1, LONG = 2, SHORT = 3, HW = 4, ROLE = 5, CHANNEL = 6, FW = 7, LAT = 8, LON = 9, HEARD = 10;
+    var nodes = JSON.parse(document.getElementById("node-data").textContent);
+
+    // Canvas draws thousands of circles much faster than one SVG element each
+    var map = L.map('map', { preferCanvas: true });
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
 
-    var markers = { LongFast: [], MediumSlow: [], RouterLongFast: [], RouterMediumSlow: [] };
-    var bounds = L.latLngBounds();
+    var COLORS = { LongFast: "#ff0000", MediumSlow: "#0000ff", MediumFast: "#f08c00" };
+    var OTHER = "#868e96";
+    var layer = L.layerGroup().addTo(map);
 
-    var nodes = [
-        {% for node in nodes %}
-        {
-            lat: {{ node.last_lat / 10**7 if node.last_lat else "null" }},
-            long: {{ node.last_long / 10**7 if node.last_long else "null" }},
-            long_name: "{{ node.long_name | escape }}",
-            short_name: "{{ node.short_name | escape }}",
-            channel: "{{ node.channel | escape }}",
-            hw_model: "{{ node.hw_model | escape }}",
-            role: "{{ node.role | escape }}",
-            last_update: "{{ node.last_update | escape }}",
-            firmware: "{{ node.firmware | escape }}",
-            id: "{{ node.node_id }}"
-        },
-        {% endfor %}
-    ];
+    function esc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+        });
+    }
 
-    function timeAgo(date) {
-        var now = new Date();
-        var diff = now - new Date(date);
-        var seconds = Math.floor(diff / 1000);
+    function timeAgo(ts) {
+        var seconds = Math.floor(Date.now() / 1000 - ts);
         var minutes = Math.floor(seconds / 60);
         var hours = Math.floor(minutes / 60);
         var days = Math.floor(hours / 24);
@@ -86,45 +100,36 @@
         return seconds + "s";
     }
 
-    nodes.forEach(function(node) {
-        if (node.lat !== null && node.long !== null) {
-            let category = node.channel.toLowerCase().includes("mediumslow") ? "MediumSlow" : "LongFast";
-            let color = category === "MediumSlow" ? "#0000ff" : "#ff0000";
-            let isRouter = node.role.toLowerCase().includes("router");
+    // One checkbox per channel, biggest first; the colored dot is the legend
+    var counts = {};
+    nodes.forEach(function (n) { counts[n[CHANNEL] || "unknown"] = (counts[n[CHANNEL] || "unknown"] || 0) + 1; });
+    var channels = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; });
+    document.getElementById("channel-filters").innerHTML = channels.map(function (ch) {
+        return '<label><input type="checkbox" class="filter-channel" value="' + esc(ch) + '" checked>' +
+            '<span class="dot" style="background:' + (COLORS[ch] || OTHER) + '"></span>' + esc(ch) +
+            ' <span class="count">' + counts[ch] + "</span></label>";
+    }).join(" ");
 
-            let markerOptions = {
-                radius: isRouter ? 9 : 7,
-                color: "white",
-                fillColor: color,
-                fillOpacity: 1,
-                weight: .7,
-            };
-
-            var popupContent = `
-                <b><a href="/packet_list/${node.id}">${node.long_name}</a> (${node.short_name})</b><br>
-                <b>Channel:</b> ${node.channel}<br>
-                <b>Model:</b> ${node.hw_model}<br>
-                <b>Role:</b> ${node.role}<br>
-            `;
-            if (node.last_update) popupContent += `<b>Last seen:</b> ${timeAgo(node.last_update)}<br>`;
-            if (node.firmware) popupContent += `<b>Firmware:</b> ${node.firmware}<br>`;
-
-            var marker = L.circleMarker([node.lat, node.long], markerOptions).bindPopup(popupContent);
-
-            marker.addTo(map);
-
-            if (isRouter) {
-                if (category === "LongFast") {
-                    markers.RouterLongFast.push(marker);
-                } else {
-                    markers.RouterMediumSlow.push(marker);
-                }
-            } else {
-                markers[category].push(marker);
-            }
-
-            bounds.extend(marker.getLatLng());
-        }
+    nodes.forEach(function (n) {
+        var isRouter = (n[ROLE] || "").toLowerCase().includes("router");
+        var name = esc(n[LONG] || n[ID]);
+        // nodes with a garbled id have no node_id, so there is no packet list to link to
+        if (n[NODE_ID] != null) name = '<a href="/packet_list/' + n[NODE_ID] + '">' + name + "</a>";
+        var popup =
+            "<b>" + name + " (" + esc(n[SHORT]) + ")</b><br>" +
+            "<b>Channel:</b> " + esc(n[CHANNEL]) + "<br>" +
+            "<b>Model:</b> " + esc(n[HW]) + "<br>" +
+            "<b>Role:</b> " + esc(n[ROLE]) + "<br>";
+        if (n[HEARD]) popup += "<b>Last seen:</b> " + timeAgo(n[HEARD]) + "<br>";
+        if (n[FW]) popup += "<b>Firmware:</b> " + esc(n[FW]) + "<br>";
+        n.router = isRouter;
+        n.marker = L.circleMarker([n[LAT], n[LON]], {
+            radius: isRouter ? 9 : 7,
+            color: "white",
+            fillColor: COLORS[n[CHANNEL]] || OTHER,
+            fillOpacity: 1,
+            weight: .7,
+        }).bindPopup(popup);
     });
 
     var bayAreaBounds = [
@@ -133,22 +138,26 @@
     ];
     map.fitBounds(bayAreaBounds);
 
-
     function updateMarkers() {
-        let showLongFast = document.getElementById("filter-longfast").checked;
-        let showMediumSlow = document.getElementById("filter-mediumslow").checked;
-        let showRouterLongFast = document.getElementById("filter-router-longfast").checked;
-        let showRouterMediumSlow = document.getElementById("filter-router-mediumslow").checked;
+        var shown = {};
+        document.querySelectorAll(".filter-channel").forEach(function (c) { shown[c.value] = c.checked; });
+        var clients = document.getElementById("show-clients").checked;
+        var routers = document.getElementById("show-routers").checked;
+        var hours = Number(document.getElementById("heard").value);
+        var since = hours ? Date.now() / 1000 - hours * 3600 : 0;
 
-        markers.LongFast.forEach(m => showLongFast ? map.addLayer(m) : map.removeLayer(m));
-        markers.MediumSlow.forEach(m => showMediumSlow ? map.addLayer(m) : map.removeLayer(m));
-        markers.RouterLongFast.forEach(m => showRouterLongFast ? map.addLayer(m) : map.removeLayer(m));
-        markers.RouterMediumSlow.forEach(m => showRouterMediumSlow ? map.addLayer(m) : map.removeLayer(m));
+        layer.clearLayers();
+        nodes.forEach(function (n) {
+            if (shown[n[CHANNEL] || "unknown"] && (n.router ? routers : clients) && n[HEARD] >= since) {
+                layer.addLayer(n.marker);
+            }
+        });
     }
 
-    document.querySelectorAll(".filter-checkbox").forEach(input => {
+    document.querySelectorAll("#filter-container input, #filter-container select").forEach(function (input) {
         input.addEventListener("change", updateMarkers);
     });
 
+    updateMarkers();
 </script>
 {% endblock %}

@@ -13,7 +13,7 @@
             autocomplete="off"
             list="node_options"
             value="{{raw_node_id}}"
-            hx-trigger="input delay:100ms"
+            hx-trigger="input delay:250ms"
             hx-get="/node_match"
             hx-target="#node_options"
         />
@@ -27,7 +27,7 @@
                 71: "Neighbor Info",
             }
         %}
-        <select name="portnum" class="col-2 m-2">
+        <select name="portnum" class="col-2 m-2" onchange="this.form.submit()">
             <option
                 value = ""
                 {% if portnum not in options %}selected{% endif %}

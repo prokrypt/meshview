@@ -1,0 +1,5 @@
+{% if more %}
+<span class="d-block text-center text-secondary py-3" data-lazy-more
+      hx-get="/chat_older?before={{ oldest | urlencode }}&channel={{ channel | urlencode }}"
+      hx-trigger="near" hx-swap="outerHTML" hx-indicator="#chat-busy">Loading older messages…</span>
+{% endif %}

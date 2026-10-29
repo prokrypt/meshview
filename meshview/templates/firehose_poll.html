@@ -1,0 +1,4 @@
+{# Replaced by itself (with a newer cursor) plus any new packets; not while paused or hidden #}
+<span id="firehose-poll" hx-get="/firehose_newer?after={{ newest | urlencode }}&portnum={{ portnum or '' }}"
+      hx-trigger="every {{ poll_s }}s [!document.hidden && !window.firehosePaused], catchup"
+      hx-swap="outerHTML" hx-indicator="#firehose-busy"></span>

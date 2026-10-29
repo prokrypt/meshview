@@ -8,6 +8,7 @@ import "meshtastic/module_config.proto";
 import "meshtastic/portnums.proto";
 import "meshtastic/telemetry.proto";
 import "meshtastic/xmodem.proto";
+import "meshtastic/device_ui.proto";
 
 option csharp_namespace = "Meshtastic.Protobufs";
 option go_package = "github.com/meshtastic/go/generated";
@@ -16,7 +17,7 @@ option java_package = "com.geeksville.mesh";
 option swift_prefix = "";
 
 /*
- * a gps position
+ * A GPS Position
  */
 message Position {
   /*
@@ -338,6 +339,11 @@ enum HardwareModel {
    * Heltec HRU-3601: https://heltec.org/project/hru-3601/
    */
   HELTEC_HRU_3601 = 23;
+  
+  /*
+   * Heltec Wireless Bridge
+   */
+  HELTEC_WIRELESS_BRIDGE = 24;
 
   /*
    * B&Q Consulting Station Edition G1: https://uniteng.com/wiki/doku.php?id=meshtastic:station
@@ -427,7 +433,7 @@ enum HardwareModel {
   DR_DEV = 41;
 
   /*
-   * M5 esp32 based MCU modules with enclosure, TFT and LORA Shields. All Variants (Basic, Core, Fire, Core2, Paper) https://m5stack.com/
+   * M5 esp32 based MCU modules with enclosure, TFT and LORA Shields. All Variants (Basic, Core, Fire, Core2, CoreS3, Paper) https://m5stack.com/
    */
   M5STACK = 42;
 
@@ -609,6 +615,62 @@ enum HardwareModel {
    * Minewsemi ME25LS01 (ME25LE01_V1.0). NRF52840 w/ LR1110 radio, buttons and leds and pins.
    */
   ME25LS01_4Y10TD = 75;
+
+  /*
+   * RP2040_FEATHER_RFM95
+   * Adafruit Feather RP2040 with RFM95 LoRa Radio RFM95 with SX1272, SSD1306 OLED
+   * https://www.adafruit.com/product/5714
+   * https://www.adafruit.com/product/326
+   * https://www.adafruit.com/product/938
+   *  ^^^ short A0 to switch to I2C address 0x3C
+   *
+   */
+  RP2040_FEATHER_RFM95 = 76;
+  
+  /* M5 esp32 based MCU modules with enclosure, TFT and LORA Shields. All Variants (Basic, Core, Fire, Core2, CoreS3, Paper) https://m5stack.com/ */
+  M5STACK_COREBASIC = 77;
+  M5STACK_CORE2 = 78;
+
+  /* Pico2 with Waveshare Hat, same as Pico */
+  RPI_PICO2 = 79;
+
+  /* M5 esp32 based MCU modules with enclosure, TFT and LORA Shields. All Variants (Basic, Core, Fire, Core2, CoreS3, Paper) https://m5stack.com/ */
+  M5STACK_CORES3 = 80;
+  
+  /* Seeed XIAO S3 DK*/
+  SEEED_XIAO_S3 = 81;
+
+   /*
+   * Nordic nRF52840+Semtech SX1262 LoRa BLE Combo Module. nRF52840+SX1262 MS24SF1
+   */
+  MS24SF1 = 82;
+
+  /*
+   * Lilygo TLora-C6 with the new ESP32-C6 MCU
+   */
+  TLORA_C6 = 83;
+
+  /*
+   * WisMesh Tap
+   * RAK-4631 w/ TFT in injection modled case
+   */
+  WISMESH_TAP = 84;
+
+  /*
+   * Similar to PORTDUINO but used by Routastic devices, this is not any
+   * particular device and does not run Meshtastic's code but supports
+   * the same frame format.
+   * Runs on linux, see https://github.com/Jorropo/routastic
+   */
+  ROUTASTIC = 85;
+
+  /*
+   * Mesh-Tab, esp32 based
+   * https://github.com/valzzu/Mesh-Tab
+   */
+  MESH_TAB = 86;
+
+  
 
   /*
    * ------------------------------------------------------------------------------------------------------------------------------------------
@@ -798,7 +860,17 @@ message Routing {
     /*
      * The receiving node does not have a Public Key to decode with
      */
-     PKI_UNKNOWN_PUBKEY = 35;
+    PKI_UNKNOWN_PUBKEY = 35;
+
+    /*
+     * Admin packet otherwise checks out, but uses a bogus or expired session key
+     */
+    ADMIN_BAD_SESSION_KEY = 36;
+
+    /*
+     * Admin packet sent using PKC, but not from a public key on the admin key list
+     */
+    ADMIN_PUBLIC_KEY_UNAUTHORIZED = 37;
   }
 
   oneof variant {
@@ -875,6 +947,11 @@ message Data {
    * a message a heart or poop emoji.
    */
   fixed32 emoji = 8;
+
+  /*
+   * Bitfield for extra flags. First use is to indicate that user approves the packet being uploaded to MQTT.
+   */
+  optional uint32 bitfield = 9;
 }
 
 /*
@@ -1008,6 +1085,22 @@ message MeshPacket {
     RELIABLE = 70;
 
     /*
+     * If priority is unset but the packet is a response to a request, we want it to get there relatively quickly.
+     * Furthermore, responses stop relaying packets directed to a node early.
+     */
+    RESPONSE = 80;
+
+    /*
+     * Higher priority for specific message types (portnums) to distinguish between other reliable packets.
+     */ 
+    HIGH = 100;
+
+    /*
+     * Higher priority alert message used for critical alerts which take priority over other reliable packets.
+     */ 
+    ALERT = 110;
+
+    /*
      * Ack/naks are sent with very high priority to ensure that retransmission
      * stops as soon as possible
      */
@@ -1111,7 +1204,7 @@ message MeshPacket {
   float rx_snr = 8;
 
   /*
-   * If unset treated as zero (no forwarding, send to adjacent nodes only)
+   * If unset treated as zero (no forwarding, send to direct neighbor nodes only)
    * if 1, allow hopping through one node, etc...
    * For our usecase real world topologies probably have a max of about 3.
    * This field is normally placed into a few of bits in the header.
@@ -1167,6 +1260,25 @@ message MeshPacket {
    * Indicates whether the packet was en/decrypted using PKI
    */
   bool pki_encrypted = 17;
+
+  /*
+   * Last byte of the node number of the node that should be used as the next hop in routing. 
+   * Set by the firmware internally, clients are not supposed to set this.
+   */
+  uint32 next_hop = 18;
+
+  /*
+   * Last byte of the node number of the node that will relay/relayed this packet.
+   * Set by the firmware internally, clients are not supposed to set this.
+   */
+  uint32 relay_node = 19;
+
+  /*
+   * *Never* sent over the radio links.
+   * Timestamp after which this packet may be sent.
+   * Set by the firmware internally, clients are not supposed to set this.
+   */
+  uint32 tx_after = 20;
 }
 
 /*
@@ -1184,7 +1296,7 @@ enum Constants {
    * note: this payload length is ONLY the bytes that are sent inside of the Data protobuf (excluding protobuf overhead). The 16 byte header is
    * outside of this envelope
    */
-  DATA_PAYLOAD_LEN = 237;
+  DATA_PAYLOAD_LEN = 233;
 }
 
 /*
@@ -1251,7 +1363,7 @@ message NodeInfo {
   /*
    * TODO: REMOVE/INTEGRATE
    * Not currently used (till full DSR deployment?) Our current preferred node node for routing - might be the same as num if
-   * we are adjacent Or zero if we don't yet know a route to this node.
+   * we are direct neighbor or zero if we don't yet know a route to this node.
    * fixed32 next_hop = 5;
    */
 
@@ -1275,15 +1387,21 @@ message NodeInfo {
   bool via_mqtt = 8;
 
   /*
-   * Number of hops away from us this node is (0 if adjacent)
+   * Number of hops away from us this node is (0 if direct neighbor)
    */
-  uint32 hops_away = 9;
+  optional uint32 hops_away = 9;
 
   /*
    * True if node is in our favorites list
    * Persists between NodeDB internal clean ups
    */
   bool is_favorite = 10;
+
+  /*
+   * True if node is in our ignored list
+   * Persists between NodeDB internal clean ups
+   */
+  bool is_ignored = 11;
 }
 
 /*
@@ -1391,6 +1509,16 @@ message MyNodeInfo {
    * Phone/PC apps should compare this to their build number and if too low tell the user they must update their app
    */
   uint32 min_app_version = 11;
+
+  /*
+   * Unique hardware identifier for this device
+   */
+  bytes device_id = 12;
+
+  /*
+   * The PlatformIO environment used to build this firmware
+   */
+  string pio_env = 13;
 }
 
 /*
@@ -1575,6 +1703,11 @@ message FromRadio {
      * Notification message to the client
      */
     ClientNotification clientNotification = 16;
+
+    /*
+     * Persistent data for device-ui
+     */
+    DeviceUIConfig deviceuiConfig = 17;
   }
 }
 
@@ -1789,6 +1922,94 @@ message DeviceMetadata {
    * Has Remote Hardware enabled
    */
   bool hasRemoteHardware = 10;
+
+  /*
+   * Has PKC capabilities
+   */
+  bool hasPKC = 11;
+
+  /*
+   * Bit field of boolean for excluded modules
+   * (bitwise OR of ExcludedModules)
+   */
+  uint32 excluded_modules = 12;
+}
+
+/*
+ * Enum for modules excluded from a device's configuration.
+ * Each value represents a ModuleConfigType that can be toggled as excluded
+ * by setting its corresponding bit in the `excluded_modules` bitmask field.
+ */
+enum ExcludedModules {
+  /*
+   * Default value of 0 indicates no modules are excluded.
+   */
+  EXCLUDED_NONE = 0x0000;
+
+  /*
+   * MQTT module
+   */
+  MQTT_CONFIG = 0x0001;
+
+  /*
+   * Serial module
+   */
+  SERIAL_CONFIG = 0x0002;
+
+  /*
+   * External Notification module
+   */
+  EXTNOTIF_CONFIG = 0x0004;
+
+  /*
+   * Store and Forward module
+   */
+  STOREFORWARD_CONFIG = 0x0008;
+
+  /*
+   * Range Test module
+   */
+  RANGETEST_CONFIG = 0x0010;
+
+  /*
+   * Telemetry module
+   */
+  TELEMETRY_CONFIG = 0x0020;
+
+  /*
+   * Canned Message module
+   */
+  CANNEDMSG_CONFIG = 0x0040;
+
+  /*
+   * Audio module
+   */
+  AUDIO_CONFIG = 0x0080;
+
+  /*
+   * Remote Hardware module
+   */
+  REMOTEHARDWARE_CONFIG = 0x0100;
+
+  /*
+   * Neighbor Info module
+   */
+  NEIGHBORINFO_CONFIG = 0x0200;
+
+  /*
+   * Ambient Lighting module
+   */
+  AMBIENTLIGHTING_CONFIG = 0x0400;
+
+  /*
+   * Detection Sensor module
+   */
+  DETECTIONSENSOR_CONFIG = 0x0800;
+
+  /*
+   * Paxcounter module
+   */
+  PAXCOUNTER_CONFIG = 0x1000;
 }
 
 /*

@@ -57,20 +57,20 @@
     var fromNode = L.circleMarker(fromNodeLatLng, {
         radius: 8,
         color: 'red',
-        weight: 1,
+        weight: 4,
         fillColor: 'red',
         fillOpacity: 0.4
     }).addTo(markers);
 
     // Add tooltip for the from_node_cord
     fromNode.bindTooltip(`
-        Sent by:   <b>{{node.long_name}}</b><br/>
-        <b>Short:</b> {{node.short_name}}<br/>
-        <b>Channel:</b> {{node.channel}}<br/>
-        <b>Hardware:</b> {{node.hw_model}}<br/>
-        <b>Role:</b> {{node.role}}<br/>
-        <b>Firmware:</b> {{node.firmware}}<br/>
-        <b>Coordinates:</b> [{{node.last_lat}}, {{node.last_long}}]
+        Sent by:   <b>{{ node.long_name|js_html }}</b><br/>
+        <b>Short:</b> {{ node.short_name|js_html }}<br/>
+        <b>Channel:</b> {{ node.channel|js_html }}<br/>
+        <b>Hardware:</b> {{ node.hw_model|js_html }}<br/>
+        <b>Role:</b> {{ node.role|js_html }}<br/>
+        <b>Firmware:</b> {{ node.firmware|js_html }}<br/>
+        <b>Coordinates:</b> [{{ node.last_lat|js_html }}, {{ node.last_long|js_html }}]
     `, { permanent: false, direction: 'top', opacity: 0.9 });
     {% endif %}
 
@@ -80,6 +80,7 @@
         // Calculate distance in miles
         var distanceMiles = getDistanceInMiles(fromNodeLatLng, uplinkNodeLatLng).toFixed(1);
 
+/*
         var node = L.circleMarker(uplinkNodeLatLng, {
             radius: 6,
             color: 'blue',
@@ -87,17 +88,33 @@
             fillColor: 'blue',
             fillOpacity: 0.4
         }).addTo(markers);
+*/
+
+		var node = L.marker(uplinkNodeLatLng, {
+		    icon: L.divIcon({
+		        className: 'text-icon',  // Custom class for styling
+        		html: '<div style="font-size: 12px; color: white; font-weight: bold; display: flex; justify-content: center; align-items: center; height: 16px; width: 16px; border-radius: 50%; background-color: blue; border: 1px solid blue;">{{u.hops}}</div>',
+		        iconSize: [16, 16],  // Size of the icon container
+		        iconAnchor: [8, 8]  // Anchoring the text to the center of the marker
+		    })
+		}).addTo(markers);
+		node.setZIndexOffset({{u.hops}}*-100);
 
         // Add a tooltip with node details and distance
         node.bindTooltip(`
-            Seen by: <b>[{{ u.short_name }}] {{ u.long_name }}</b><br/>
-            <b>Hops:</b> {{ u.hops }}<br/>
-            <b>SNR:</b> {{ u.snr }}<br/>
-            <b>RSSI:</b> {{ u.rssi }}<br/>
+            Seen by: <b>[{{ u.short_name|js_html }}] {{ u.long_name|js_html }}</b><br/>
+            <b>Hops:</b> {{ u.hops|js_html }}<br/>
+            <b>SNR:</b> {{ u.snr|js_html }}<br/>
+            <b>RSSI:</b> {{ u.rssi|js_html }}<br/>
             <b>Distance:</b> ${distanceMiles} miles <br/>
-            <b>Coordinates:</b> [{{u.lat}}, {{u.long}}]
+            <b>Coordinates:</b> [{{ u.lat|js_html }}, {{ u.long|js_html }}]
         `, { permanent: false, direction: 'top', opacity: 0.9 });
+        
     {% endfor %}
+
+    if (markers.getLayers().length > 0) {
+        details_map.fitBounds(markers.getBounds().pad(0.1), { animate: true });
+    }
 
     // Ensure markers are added before adjusting map bounds
     setTimeout(() => {
@@ -121,10 +138,10 @@
         div.innerHTML = `
             <b>Legend</b><br>
             <svg width="16" height="16">
-                <circle cx="8" cy="8" r="6" fill="blue" stroke="blue" stroke-width="1" fill-opacity="0.4"/>
+                <circle cx="8" cy="8" r="6" fill="blue" stroke="blue" stroke-width="1" fill-opacity="0.9"/>
             </svg> Receiving Node<br>
             <svg width="20" height="20">
-                <circle cx="10" cy="10" r="8" fill="red" stroke="red" stroke-width="1" fill-opacity="0.4"/>
+                <circle cx="10" cy="10" r="8" fill="red" stroke="red" stroke-width="4" fill-opacity="0.4"/>
             </svg> Sending Node<br>
         `;
         return div;

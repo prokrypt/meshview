@@ -27,13 +27,15 @@
     </div>
     <div class="card-body">
         <div class="card-title">
-        {{packet.id}}
+        {{packet.mesh_id}}
             <a href="/packet/{{packet.id}}">🔎</a>
         </div>
         <div class="card-text text-start">
             <dl>
                 <dt>Import Time</dt>
                 <dd>{{packet.import_time.strftime('%-I:%M:%S %p - %d-%m-%Y')}}</dd>
+                <dt>channel</dt>
+                <dd>{{packet.from_node.channel}}</dd>
                 <dt>packet</dt>
                 <dd><pre>{{packet.data}}</pre></dd>
                 <dt>payload</dt>
@@ -42,6 +44,9 @@
                     <div>{{packet.pretty_payload}}</div>
                     {% endif %}
                     {% if  packet.raw_mesh_packet.decoded and packet.raw_mesh_packet.decoded.portnum == 70 %}
+                        {% if packet.raw_payload.route_back %}
+                        <div>towards destination:</div>
+                        {% endif %}
                         <ul>
                             {% for node_id in packet.raw_payload.route %}
                                 <li><a
@@ -52,13 +57,26 @@
                                 </li>
                             {% endfor %}
                         </ul>
+                        {% if packet.raw_payload.route_back %}
+                        <div>back:</div>
+                        <ul>
+                            {% for node_id in packet.raw_payload.route_back %}
+                                <li><a
+                                        href="/packet_list/{{node_id}}"
+                                    >
+                                        {{node_id | node_id_to_hex}}
+                                    </a>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
                         {% if packet.raw_mesh_packet.decoded.want_response %}
                         <a href="/graph/traceroute/{{packet.id}}">graph</a>
                         {% else %}
                         <a href="/graph/traceroute/{{packet.raw_mesh_packet.decoded.request_id}}">graph</a>
                         {% endif %}
                     {% endif %}
-                    <pre>{{packet.payload}}</pre>
+                    <pre>{{ packet.payload }}</pre>
                 </dd>
             </dl>
         </div>

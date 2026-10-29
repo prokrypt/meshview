@@ -3,6 +3,7 @@ import io
 from collections import Counter
 from dataclasses import dataclass
 import datetime
+import math
 import ssl
 import re
 import os
@@ -12,8 +13,8 @@ import plotly.express as px
 import seaborn as sns
 import matplotlib.pyplot as plt
 from aiohttp import web
-from markupsafe import Markup
-from jinja2 import Environment, PackageLoader, select_autoescape
+from markupsafe import Markup, escape
+from jinja2 import Environment, PackageLoader, select_autoescape, Undefined
 from google.protobuf import text_format
 from google.protobuf.message import Message
 from meshtastic.protobuf.portnums_pb2 import PortNum
@@ -41,7 +42,9 @@ with open(os.path.join(os.path.dirname(__file__), '1x1.png'), 'rb') as png:
 
 @dataclass
 class Packet:
+    import re
     id: int
+    mesh_id: int
     from_node_id: int
     from_node: models.Node
     to_node_id: int
@@ -54,9 +57,11 @@ class Packet:
     pretty_payload: Markup
     import_time: datetime.datetime
 
+    
 
     @classmethod
     def from_model(cls, packet):
+
         mesh_packet, payload = decode_payload.decode(packet)
 
         pretty_payload = None
@@ -91,6 +96,7 @@ class Packet:
 
         return cls(
             id=packet.id,
+            mesh_id=packet.mesh_id if packet.mesh_id is not None else packet.id,
             from_node=packet.from_node,
             from_node_id=packet.from_node_id,
             to_node=packet.to_node,
@@ -165,11 +171,12 @@ async def build_neighbors(node_id):
 
 
 def node_id_to_hex(node_id):
+    if node_id is None or isinstance(node_id, Undefined):
+        return "Invalid node_id" # i... have no clue
     if node_id == 4294967295:
         return "^all"
     else:
         return f"!{hex(node_id)[2:]}"
-
 
 def format_timestamp(timestamp):
     if isinstance(timestamp, int):
@@ -180,11 +187,54 @@ def format_timestamp(timestamp):
 env.filters["node_id_to_hex"] = node_id_to_hex
 env.filters["format_timestamp"] = format_timestamp
 
+
+def node_rows(nodes):
+    """One compact row per node for pages that draw nodes in JS (nodelist, map):
+    node_id, id, long_name, short_name, hw_model, role, channel, firmware, lat, lon, last heard"""
+    return [
+        [
+            n.node_id, n.id, n.long_name, n.short_name, n.hw_model, n.role, n.channel,
+            n.firmware,
+            round(n.last_lat / 10**7, 5) if n.last_lat else None,
+            round(n.last_long / 10**7, 5) if n.last_long else None,
+            int(n.last_update.timestamp()) if n.last_update else 0,
+        ]
+        for n in nodes
+    ]
+
+
+def js_html(value):
+    """HTML-escape a value for use inside a JS template literal (`...`): also escape the
+    characters that would end it or start a ${...} expression. Node names come from the radios."""
+    text = str(escape(value))
+    return Markup(text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$"))
+
+
+env.filters["js_html"] = js_html
+
+
+# nodegraph.html: nodes as [node_id, long_name, short_name, role, hw_model],
+# edges as [from, to, color, type, width]; the template turns them into echarts data
+env.filters["graph_nodes"] = lambda nodes: [
+    [n.node_id, n.long_name, n.short_name, n.role, n.hw_model] for n in nodes
+]
+env.filters["graph_edges"] = lambda edges: [
+    [e["from"], e["to"], e["originalColor"], e["edgeType"], e["lineStyle"].get("width", 1)]
+    for e in edges
+]
+
 routes = web.RouteTableDef()
 @routes.get("/")
 async def index(request):
     raise web.HTTPFound(location="/map")  # Redirect to /home
 
+@routes.get("/robots.txt")
+async def robots_txt(request):
+    robots_content = "User-agent: *\nDisallow: /\n"
+    return web.Response(
+        text=robots_content,
+        content_type="text/plain"
+    )
 
 def generate_response(request, body, raw_node_id="", node=None):
     if "HX-Request" in request.headers:
@@ -197,6 +247,7 @@ def generate_response(request, body, raw_node_id="", node=None):
             raw_node_id=raw_node_id,
             node_html=Markup(body),
             node=node,
+            site_config=CONFIG,
         ),
         content_type="text/html",
     )
@@ -211,6 +262,7 @@ async def node_search(request):
 
     raw_node_id = request.query["q"]
     node_id = None
+    fuzzy_nodes = []
 
     if raw_node_id == "^all":
         node_id = 0xFFFFFFFF
@@ -238,7 +290,7 @@ async def node_search(request):
 
     template = env.get_template("search.html")
     response = web.Response(
-        text=template.render(nodes=fuzzy_nodes, query_string=request.query_string),
+        text=template.render(nodes=fuzzy_nodes, query_string=request.query_string, site_config=CONFIG),
         content_type="text/html",
     )
     gc.collect()
@@ -270,7 +322,6 @@ async def packet_list(request):
         portnum = int(portnum)
     else:
         portnum = None
-
 
     async with asyncio.TaskGroup() as tg:
         node = tg.create_task(store.get_node(node_id))
@@ -354,22 +405,61 @@ async def packet_details(request):
     )
 
 
-@routes.get("/firehose")
-async def packet_details(request):
+FIREHOSE_PAGE = 25     # packets per page; older ones load before you scroll to the end
+FIREHOSE_POLL_S = 5    # seconds between checks for new packets (Pause stops them)
+
+
+def firehose_portnum(request):
     portnum = request.query.get("portnum")
-    if portnum:
-        portnum = int(portnum)
-    packets = await store.get_packets(portnum=portnum, limit=20)
-    print_memory_usage()
-    template = env.get_template("firehose.html")
+    try:
+        return int(portnum) if portnum else None
+    except ValueError:
+        raise web.HTTPBadRequest()
+
+
+def firehose_render(name, portnum, packets, newest=None, oldest=None, more=False):
+    template = env.get_template(name)
     return web.Response(
         text=template.render(
-            packets=(Packet.from_model(p) for p in packets),
+            packets=[Packet.from_model(p) for p in packets],
             portnum=portnum,
+            newest=page_cursor(newest), oldest=page_cursor(oldest), more=more,
+            poll_s=FIREHOSE_POLL_S,
             site_config = CONFIG,
         ),
         content_type="text/html",
     )
+
+
+@routes.get("/firehose")
+async def packet_details(request):
+    portnum = firehose_portnum(request)
+    packets = await store.get_packets(portnum=portnum, limit=FIREHOSE_PAGE)
+    print_memory_usage()
+    return firehose_render(
+        "firehose.html", portnum, packets,
+        newest=packets[0].import_time if packets else datetime.datetime.now(),
+        oldest=packets[-1].import_time if packets else None,
+        more=len(packets) == FIREHOSE_PAGE,
+    )
+
+
+# htmx fragments for /firehose, like /chat_older and /chat_newer
+@routes.get("/firehose_older")
+async def firehose_older(request):
+    portnum = firehose_portnum(request)
+    before = page_time(request.query.get("before"))
+    packets = await store.get_packets(portnum=portnum, limit=FIREHOSE_PAGE, before=before)
+    return firehose_render("firehose_older.html", portnum, packets,
+                           oldest=packets[-1].import_time if packets else before, more=len(packets) == FIREHOSE_PAGE)
+
+
+@routes.get("/firehose_newer")
+async def firehose_newer(request):
+    portnum = firehose_portnum(request)
+    after = page_time(request.query.get("after"))
+    packets = await store.get_packets(portnum=portnum, limit=500, after=after)
+    return firehose_render("firehose_newer.html", portnum, packets, newest=packets[0].import_time if packets else after)
 
 
 @routes.get("/packet/{packet_id}")
@@ -408,9 +498,11 @@ async def graph_telemetry(node_id, payload_type, graph_config):
         timestamp = p.import_time
         data['date'].append(timestamp)
         for field in fields:
-            data[field].append(getattr(data_field, field))
+            # Fields a node never sends (e.g. wind on a plain node) are gaps, not zeros
+            data[field].append(getattr(data_field, field) if data_field.HasField(field) else math.nan)
 
-    if not data['date']:
+    present = {f for f in fields if any(not math.isnan(v) for v in data[f])}
+    if not data['date'] or not present:
         return web.Response(
             body=empty_png,
             status=404,
@@ -431,14 +523,19 @@ async def graph_telemetry(node_id, payload_type, graph_config):
     date = data.pop('date')
     df = DataFrame(data, index=date)
 
-    for i, ax_config in enumerate(graph_config):
+    drawn = 0
+    for ax_config in graph_config:
+        ax_fields = [f for f in ax_config['fields'] if f in present]
+        if not ax_fields:
+            continue
         args = {}
         if 'color' in ax_config:
             args['color'] =  'tab:' + ax_config['color']
-        if i:
+        if drawn:
             ax = ax.twinx()
+        drawn += 1
         ax.set_ylabel(ax_config['label'], **args)
-        ax_df = df[ax_config['fields']]
+        ax_df = df[ax_fields]
         args = {}
         if 'palette' in ax_config:
             args['palette'] = ax_config['palette']
@@ -665,7 +762,14 @@ async def graph_neighbors2(request):
         if node:
             d['node_name'] = node.short_name
         else:
-            d['node_name'] = node_id_to_hex(node_id)
+            d['node_name'] = node_id_to_hex(d['node_id'])
+
+    if not data:
+        # plotly can't draw an empty table; crawlers follow the link from every node page
+        return web.Response(
+            text="<!doctype html><title>Neighbors</title><p>No neighbor info from this node in the last 30 days.</p>",
+            content_type="text/html",
+        )
 
     df = DataFrame(data)
     fig = px.line(df, x="time", y="snr", color="node_name", markers=True)
@@ -675,6 +779,34 @@ async def graph_neighbors2(request):
         text=html,
         content_type="text/html",
     )
+
+def traceroute_paths(tr, packet, route):
+    """Node paths of one traceroute record: (towards, back).
+
+    towards runs from the requester to the destination, or to the uplinking
+    gateway while the request is still under way. back is the reply's way
+    home: from the destination to the gateway that uplinked the reply. It is
+    None for requests and for replies that carry no return path (firmware
+    that doesn't fill route_back/snr_back).
+    """
+    towards = [packet.from_node_id]
+    towards.extend(route.route)
+    if tr.done:
+        towards.append(packet.to_node_id)
+    elif towards[-1] != tr.gateway_node_id:
+        # It seems some nodes add them self to the list before uplinking
+        towards.append(tr.gateway_node_id)
+
+    back = None
+    if tr.done and (route.route_back or route.snr_back):
+        back = [packet.to_node_id]
+        back.extend(route.route_back)
+        if back[-1] != tr.gateway_node_id:
+            back.append(tr.gateway_node_id)
+        if len(back) < 2:
+            back = None
+    return towards, back
+
 
 @routes.get("/graph/traceroute/{packet_id}")
 async def graph_traceroute(request):
@@ -693,6 +825,7 @@ async def graph_traceroute(request):
         node_ids.add(tr.gateway_node_id)
         for node_id in route.route:
             node_ids.add(node_id)
+        node_ids.update(route.route_back)
     node_ids.add(packet.from_node_id)
     node_ids.add(packet.to_node_id)
 
@@ -704,25 +837,24 @@ async def graph_traceroute(request):
     graph = pydot.Dot('traceroute', graph_type="digraph")
 
     paths = set()
+    back_paths = set()
     node_color = {}
     mqtt_nodes = set()
     saw_reply = set()
     dest = None
     node_seen_time = {}
     for tr in traceroutes:
+        route = decode_payload.decode_payload(PortNum.TRACEROUTE_APP, tr.route)
+        path, back = traceroute_paths(tr, packet, route)
+        # Every gateway hears the reply at a different point of its way back
+        if back:
+            back_paths.add(tuple(back))
         if tr.done:
             saw_reply.add(tr.gateway_node_id)
         if tr.done and dest:
             continue
-        route = decode_payload.decode_payload(PortNum.TRACEROUTE_APP, tr.route)
-        path = [packet.from_node_id]
-        path.extend(route.route)
         if tr.done:
             dest = packet.to_node_id
-            path.append(packet.to_node_id)
-        elif path[-1] != tr.gateway_node_id:
-            # It seems some nodes add them self to the list before uplinking
-            path.append(tr.gateway_node_id)
 
         if not tr.done and tr.gateway_node_id not in node_seen_time and tr.import_time:
             node_seen_time[path[-1]] = tr.import_time
@@ -731,9 +863,16 @@ async def graph_traceroute(request):
         node_color[path[-1]] = '#' + hex(hash(tuple(path)))[3:9]
         paths.add(tuple(path))
 
+    for path in back_paths:
+        node_color.setdefault(path[-1], '#' + hex(hash(path))[3:9])
+
     used_nodes = set()
-    for path in paths:
+    for path in paths | back_paths:
         used_nodes.update(path)
+
+    if back_paths:
+        graph.set_label('solid: request towards the destination\ndashed: reply on its way back')
+        graph.set_labelloc('t')
 
     import_times = [tr.import_time for tr in traceroutes if tr.import_time]
     if import_times:
@@ -773,12 +912,92 @@ async def graph_traceroute(request):
         for src, dest in zip(path, path[1:]):
             graph.add_edge(pydot.Edge(src, dest, color=color))
 
+    for path in back_paths:
+        color = '#' + hex(hash(path))[3:9]
+        for src, dest in zip(path, path[1:]):
+            graph.add_edge(pydot.Edge(src, dest, color=color, style='dashed'))
+
     return web.Response(
         body=graph.create_svg(),
         content_type="image/svg+xml",
     )
 
 
+
+
+@routes.get("/tracelive")
+@routes.get("/tracelive/{minutes}")
+async def tracelive(request):
+    # Window from /tracelive/N or /tracelive?minutes=N, 1-180 minutes
+    raw = request.match_info.get("minutes") or request.query.get("minutes") or "30"
+    try:
+        minutes = max(1, min(int(raw), 180))
+    except ValueError:
+        minutes = 30
+    # Our mesh runs MediumFast; ?channel=all shows every channel
+    channel = request.query.get("channel") or "MediumFast"
+    template = env.get_template("tracelive.html")
+    return web.Response(
+        text=template.render(minutes=minutes, channel=channel, site_config=CONFIG),
+        content_type="text/html",
+    )
+
+
+@routes.get("/api/traceroutes")
+async def api_traceroutes(request):
+    """Traceroute rows of the last `minutes`, or only those after row id `after` (polling)."""
+    try:
+        minutes = max(1, min(int(request.query.get("minutes", 30)), 180))
+        after = request.query.get("after")
+        after = int(after) if after else None
+    except ValueError:
+        return web.json_response({"error": "bad parameter"}, status=400)
+    channel = request.query.get("channel")
+    if channel == "all":
+        channel = None
+
+    def snr(values):
+        # SNR is stored as dB * 4; -128 means unknown
+        return [None if v == -128 else v / 4 for v in values]
+
+    traceroutes = []
+    node_ids = set()
+    last_id = after
+    for tr in await store.get_traceroutes_live(datetime.timedelta(minutes=minutes), after, channel):
+        last_id = tr.id
+        if not tr.packet:
+            continue
+        route = decode_payload.decode_payload(PortNum.TRACEROUTE_APP, tr.route)
+        if route is None:
+            continue
+        towards, back = traceroute_paths(tr, tr.packet, route)
+        node_ids.update(towards)
+        node_ids.update(back or [])
+        traceroutes.append({
+            "id": tr.id,
+            "packet_id": tr.packet_id,
+            "time": tr.import_time.timestamp(),
+            "from": tr.packet.from_node_id,
+            "to": tr.packet.to_node_id,
+            "gateway": tr.gateway_node_id,
+            "done": bool(tr.done),
+            "towards": towards,
+            "back": back,
+            "snr_towards": snr(route.snr_towards),
+            "snr_back": snr(route.snr_back),
+        })
+
+    nodes = {}
+    if node_ids:
+        for n in await store.get_nodes_by_id(node_ids):
+            nodes[n.node_id] = {"short": n.short_name, "long": n.long_name, "role": n.role}
+
+    return web.json_response({
+        "now": datetime.datetime.now().timestamp(),
+        "last_id": last_id,
+        "traceroutes": traceroutes,
+        "nodes": nodes,
+    })
 
 
 @routes.get("/graph/traceroute2/{packet_id}")
@@ -900,7 +1119,7 @@ async def graph_traceroute2(request):
     template = env.get_template("traceroute.html")
     # Render the page with the chart data
     return web.Response(
-        text=template.render(chart_data=chart_data, packet_id=packet_id),
+        text=template.render(chart_data=chart_data, packet_id=packet_id, site_config=CONFIG),
         content_type="text/html",
     )
 
@@ -1077,13 +1296,17 @@ async def nodelist(request):
         #print(channel)
         hw_model = request.query.get("hw_model")
         #print(hw_model)
-        nodes= await store.get_nodes(role,channel, hw_model)
+        nodes= await store.get_nodes(role,channel,hw_model)
+        # The page filters, sorts and draws the rows itself, so it only ever puts a page of
+        # rows into the DOM (the full table was ~4MB)
+        rows = node_rows(nodes)
         template = env.get_template("nodelist.html")
         print_memory_usage()
-        return web.Response(
-            text=template.render(nodes=nodes, site_config = CONFIG),
+        response = web.Response(
+            text=template.render(rows=rows, site_config = CONFIG),
             content_type="text/html",
         )
+        return response
     except Exception as e:
 
         return web.Response(
@@ -1137,10 +1360,11 @@ async def net(request):
 async def map(request):
     try:
         nodes= await store.get_nodes()
+        rows = node_rows(n for n in nodes if n.last_lat and n.last_long)
         template = env.get_template("map.html")
         print_memory_usage()
         return web.Response(
-            text=template.render(nodes=nodes, site_config = CONFIG),
+            text=template.render(rows=rows, site_config = CONFIG),
             content_type="text/html",
         )
     except Exception as e:
@@ -1157,14 +1381,36 @@ def print_memory_usage():
     process = psutil.Process(os.getpid())
     print(f"Memory Usage: {process.memory_info().rss / (1024 * 1024):.2f} MB")
 
+STATS_MAX_AGE = 600
+_stats_cache = {"time": 0, "counts": None, "refresh": None}
+
+
+async def _count_stats():
+    counts = (
+        await store.get_total_packet_count(),
+        await store.get_total_node_count(),
+        await store.get_total_packet_seen_count(),
+        await store.get_active_node_counts_by_channel(),
+    )
+    _stats_cache["counts"] = counts
+    _stats_cache["time"] = asyncio.get_running_loop().time()
+    return counts
+
+
+async def stats_counts():
+    cache = _stats_cache
+    if cache["counts"] is None:
+        return await _count_stats()
+    stale = asyncio.get_running_loop().time() - cache["time"] > STATS_MAX_AGE
+    if stale and (cache["refresh"] is None or cache["refresh"].done()):
+        cache["refresh"] = asyncio.create_task(_count_stats())
+    return cache["counts"]
+
+
 @routes.get("/stats")
 async def stats(request):
     try:
-        total_packets = await store.get_total_packet_count()
-        total_nodes = await store.get_total_node_count()
-        total_packets_seen = await store.get_total_packet_seen_count()
-        total_nodes_longfast = await store.get_total_node_count_longfast()
-        total_nodes_mediumslow = await store.get_total_node_count_mediumslow()
+        total_packets, total_nodes, total_packets_seen, nodes_by_channel = await stats_counts()
         print_memory_usage()
         template = env.get_template("stats.html")
         return web.Response(
@@ -1172,8 +1418,7 @@ async def stats(request):
                 total_packets=total_packets,
                 total_nodes=total_nodes,
                 total_packets_seen=total_packets_seen,
-                total_nodes_longfast=total_nodes_longfast,
-                total_nodes_mediumslow=total_nodes_mediumslow,
+                nodes_by_channel=nodes_by_channel,
                 site_config = CONFIG,
             ),
             content_type="text/html",
@@ -1186,21 +1431,23 @@ async def stats(request):
         )
 
 @routes.get("/top")
+@routes.get("/top/{hours}")
 async def top(request):
+    hours = int(request.match_info.get('hours',24))
     try:
         node_id = request.query.get("node_id")  # Get node_id from the URL query parameters
 
         if node_id:
             # If node_id is provided, fetch traffic data for the specific node
-            node_traffic = await store.get_node_traffic(int(node_id))
-            print(node_traffic)
+            node_traffic = await store.get_node_traffic(int(node_id),hours)
+            #print(node_traffic)
             template = env.get_template("node_traffic.html")  # Render a different template
-            html_content = template.render(traffic=node_traffic, node_id=node_id, site_config = CONFIG)
+            html_content = template.render(hours=hours, traffic=node_traffic, node_id=node_id, site_config = CONFIG)
         else:
             # Otherwise, fetch top traffic nodes as usual
-            top_nodes = await store.get_top_traffic_nodes()
+            top_nodes = await store.get_top_traffic_nodes(hours)
             template = env.get_template("top.html")
-            html_content = template.render(nodes=top_nodes, site_config = CONFIG)
+            html_content = template.render(hours=hours, nodes=top_nodes, site_config = CONFIG)
 
         return web.Response(
             text=html_content,
@@ -1215,31 +1462,67 @@ async def top(request):
 
 
 
-@routes.get("/chat")
-async def chat(request):
-    try:
-        # Fetch packets for the given node ID and port number
-        packets = await store.get_packets(
-            node_id=0xFFFFFFFF, portnum=PortNum.TEXT_MESSAGE_APP, limit=100
+CHAT_PAGE = 50      # messages per page; older ones load when you scroll down
+CHAT_POLL_S = 10    # seconds between checks for new messages
+
+
+async def chat_messages(channel, before=None, after=None, limit=CHAT_PAGE):
+    """Text messages to everyone, newest first, without "seq N" test messages.
+
+    channel None means all; "Unknown" means senders without a known channel. The channel is the
+    sender's (node) channel, so it is filtered here, fetching more until limit is reached.
+    """
+    batch_size = 4 * limit
+    messages = []
+    while True:
+        batch = await store.get_packets(
+            node_id=0xFFFFFFFF, portnum=PortNum.TEXT_MESSAGE_APP, limit=batch_size, before=before, after=after
         )
-        #print(f"Fetched {len(packets)} packets.")
+        for p in batch:
+            if channel is not None and getattr(p.from_node, "channel", None) != (None if channel == "Unknown" else channel):
+                continue
+            ui = Packet.from_model(p)
+            if not re.match(r"seq \d+$", ui.payload):
+                messages.append(ui)
+        if len(messages) >= limit or len(batch) < batch_size:
+            return messages[:limit]
+        before = batch[-1].import_time
 
-        # Convert packets to UI packets
-        #print("Processing packets...")
-        ui_packets = [Packet.from_model(p) for p in packets]
 
-        # Filter packets
-        #print("Filtering packets...")
-        filtered_packets = [
-            p for p in ui_packets if not re.match(r"seq \d+$", p.payload)
-        ]
+def page_cursor(t):
+    """import_time as a cursor for the lazy-loading pages (/chat, /firehose)."""
+    return t.isoformat() if t else ""
 
-        # Render template
-        #print("Rendering template...")
-        template = env.get_template("chat.html")
-        return web.Response(
-            text=template.render(packets=filtered_packets, site_config = CONFIG),
-            content_type="text/html",
+
+def page_time(arg):
+    try:
+        return datetime.datetime.fromisoformat(arg) if arg else None
+    except ValueError:
+        raise web.HTTPBadRequest()
+
+
+def chat_render(name, channel, packets, newest=None, oldest=None, more=False):
+    template = env.get_template(name)
+    return web.Response(
+        text=template.render(
+            packets=packets, channel=channel or "", newest=page_cursor(newest), oldest=page_cursor(oldest),
+            more=more, poll_s=CHAT_POLL_S, site_config=CONFIG,
+        ),
+        content_type="text/html",
+    )
+
+
+@routes.get("/chat")
+@routes.get("/chat/{channel}")
+async def chat(request):
+    channel = request.match_info.get('channel', None)
+    try:
+        packets = await chat_messages(channel)
+        return chat_render(
+            "chat.html", channel, packets,
+            newest=packets[0].import_time if packets else datetime.datetime.now(),
+            oldest=packets[-1].import_time if packets else None,
+            more=len(packets) == CHAT_PAGE,
         )
 
     except Exception as e:
@@ -1252,16 +1535,38 @@ async def chat(request):
         )
 
 
+# htmx fragments for /chat: the next page of older messages (asked for when the end of the list
+# scrolls into view), and messages newer than the newest shown (polled)
+@routes.get("/chat_older")
+async def chat_older(request):
+    channel = request.query.get("channel") or None
+    before = page_time(request.query.get("before"))
+    packets = await chat_messages(channel, before=before)
+    return chat_render("chat_older.html", channel, packets,
+                       oldest=packets[-1].import_time if packets else before, more=len(packets) == CHAT_PAGE)
+
+
+@routes.get("/chat_newer")
+async def chat_newer(request):
+    channel = request.query.get("channel") or None
+    after = page_time(request.query.get("after"))
+    packets = await chat_messages(channel, after=after, limit=500)
+    return chat_render("chat_newer.html", channel, packets, newest=packets[0].import_time if packets else after)
+
+
+
 # Assuming the route URL structure is /nodegraph/{channel}
 @routes.get("/nodegraph/{channel}")
+@routes.get("/nodegraph/{channel}/{hrs}")
 async def nodegraph(request):
     channel = request.match_info.get('channel', 'LongFast')  # Default to 'MediumSlow' if no channel is provided
+    hrs = int(request.match_info.get('hrs',48))
     nodes = await store.get_nodes(channel=channel)  # Fetch nodes for the given channel
     node_ids = set()
     edges_set = set()  # Track unique edges
     edge_type = {}  # Store type of each edge
     used_nodes = set()  # This will track nodes involved in edges (including traceroutes)
-    since = datetime.timedelta(hours=48)
+    since = datetime.timedelta(hours=hrs)
     traceroutes = []
 
     # Fetch traceroutes
@@ -1312,9 +1617,169 @@ async def nodegraph(request):
             "from": frm,
             "to": to,
             "originalColor": "#ff5733" if edge_type[(frm, to)] == "traceroute" else "#3388ff",  # Red for traceroute, Blue for neighbor
+            "edgeType": edge_type[(frm, to)],
             "lineStyle": {
                 "color": "#ff5733" if edge_type[(frm, to)] == "traceroute" else "#3388ff",
-                "width": 2
+                "width": 1.5,
+            }
+        }
+        for frm, to in edges_set
+    ]
+
+    # Filter nodes to only include those involved in edges (including traceroutes)
+    nodes_with_edges = [node for node in nodes if node.node_id in used_nodes]
+
+    template = env.get_template("nodegraph.html")
+    return web.Response(
+        text=template.render(
+            nodes=nodes_with_edges,
+            edges=edges,  # Pass edges with color info
+            site_config = CONFIG,
+        ),
+        content_type="text/html",
+    )
+
+
+# Assuming the route URL structure is /nodegraph/{channel}
+@routes.get("/nodegraph1/{channel}")
+async def nodegraph(request):
+    channel = request.match_info.get('channel', 'LongFast')  # Default to 'MediumSlow' if no channel is provided
+    nodes = await store.get_nodes(channel=channel)  # Fetch nodes for the given channel
+    node_ids = set()
+    edges_set = set()  # Track unique edges
+    edge_type = {}  # Store type of each edge
+    used_nodes = set()  # This will track nodes involved in edges (including traceroutes)
+    since = datetime.timedelta(hours=1)
+    traceroutes = []
+
+    # Fetch traceroutes
+    for tr in await store.get_traceroutes(since):
+        node_ids.add(tr.gateway_node_id)
+        node_ids.add(tr.packet.from_node_id)
+        node_ids.add(tr.packet.to_node_id)
+        route = decode_payload.decode_payload(PortNum.TRACEROUTE_APP, tr.route)
+        node_ids.update(route.route)
+
+        path = [tr.packet.from_node_id]
+        path.extend(route.route)
+        if tr.done:
+            path.append(tr.packet.to_node_id)
+        else:
+            if path[-1] != tr.gateway_node_id:
+                path.append(tr.gateway_node_id)
+        traceroutes.append((tr, path))
+
+        # Add traceroute edges with their type and update used_nodes
+        for i in range(len(path) - 1):
+            edge_pair = (path[i], path[i + 1])
+            edges_set.add(edge_pair)
+            edge_type[edge_pair] = "traceroute"
+            used_nodes.add(path[i])  # Add all nodes in the traceroute path
+            used_nodes.add(path[i + 1])  # Add all nodes in the traceroute path
+
+    # Fetch NeighborInfo packets
+    for packet in await store.get_packets(portnum=PortNum.NEIGHBORINFO_APP, since=since):
+        try:
+            _, neighbor_info = decode_payload.decode(packet)
+            node_ids.add(packet.from_node_id)
+            used_nodes.add(packet.from_node_id)
+            for node in neighbor_info.neighbors:
+                node_ids.add(node.node_id)
+                used_nodes.add(node.node_id)
+
+                edge_pair = (node.node_id, packet.from_node_id)
+                if edge_pair not in edges_set:
+                    edges_set.add(edge_pair)
+                    edge_type[edge_pair] = "neighbor"
+        except Exception as e:
+            print(f"Error decoding NeighborInfo packet: {e}")
+
+    # Convert edges_set to a list of dicts with colors
+    edges = [
+        {
+            "from": frm,
+            "to": to,
+            "originalColor": "#ff5733" if edge_type[(frm, to)] == "traceroute" else "#3388ff",  # Red for traceroute, Blue for neighbor
+            "edgeType": edge_type[(frm, to)],
+            "lineStyle": {
+                "color": "#ff5733" if edge_type[(frm, to)] == "traceroute" else "#3388ff",
+                "width": 1.5,
+            }
+        }
+        for frm, to in edges_set
+    ]
+
+    # Filter nodes to only include those involved in edges (including traceroutes)
+    nodes_with_edges = [node for node in nodes if node.node_id in used_nodes]
+
+    template = env.get_template("nodegraph.html")
+    return web.Response(
+        text=template.render(
+            nodes=nodes_with_edges,
+            edges=edges,  # Pass edges with color info
+            site_config = CONFIG,
+        ),
+        content_type="text/html",
+    )
+
+
+# Assuming the route URL structure is /nodegraph/{channel}
+@routes.get("/tracegraph/{channel}")
+@routes.get("/tracegraph/{channel}/{mins}")
+async def nodegraph(request):
+    channel = request.match_info.get('channel', 'LongFast')  # Default to 'MediumSlow' if no channel is provided
+    mins = int(request.match_info.get('mins',60*48))
+    nodes = await store.get_nodes(channel=channel)  # Fetch nodes for the given channel
+    node_ids = set()
+    edges_set = set()  # Track unique edges
+    edge_type = {}  # Store type of each edge
+    used_nodes = set()  # This will track nodes involved in edges (including traceroutes)
+    since = datetime.timedelta(minutes=mins)
+    traceroutes = []
+    edge_count = {}
+
+    # Fetch traceroutes
+    for tr in await store.get_traceroutes(since):
+        node_ids.add(tr.gateway_node_id)
+        node_ids.add(tr.packet.from_node_id)
+        node_ids.add(tr.packet.to_node_id)
+        route = decode_payload.decode_payload(PortNum.TRACEROUTE_APP, tr.route)
+        node_ids.update(route.route)
+        node_ids.update(route.route_back)
+
+        path, back = traceroute_paths(tr, tr.packet, route)
+        traceroutes.append((tr, path))
+
+        # Add traceroute edges (request and reply hops) with their type and update used_nodes
+        for hops, hop_type in ((path, "traceroute"), (back or [], "traceroute_back")):
+            for edge_pair in zip(hops, hops[1:]):
+                edges_set.add(edge_pair)
+                # A hop seen in any request keeps the request colour
+                if edge_type.get(edge_pair) != "traceroute":
+                    edge_type[edge_pair] = hop_type
+                edge_count[edge_pair] = edge_count.get(edge_pair, 0) + 1
+                used_nodes.update(edge_pair)  # Add all nodes in the traceroute path
+
+    max_count = max(edge_count.values(), default=1)
+
+    # Red for request hops, purple for hops only seen on a reply's way back
+    colors = {"traceroute": "#ff5733", "traceroute_back": "#8e44ad"}
+
+    #import math
+    # Convert edges_set to a list of dicts with colors
+    edges = [
+        {
+            "from": frm,
+            "to": to,
+            "originalColor": colors[edge_type[(frm, to)]],
+            "edgeType": edge_type[(frm, to)],
+            "lineStyle": {
+                "color": colors[edge_type[(frm, to)]],
+                #"width": 1,
+                "width": max(1, 3 if edge_count[(frm, to)]>max_count/10 else 1),
+                #"width": max(1, int((edge_count[(frm, to)] / max_count) * 20)),
+                #"width": max(1, int(((edge_count[(frm, to)] / max_count) ** 2) * 20)),  # Quadratic scaling
+                #"width": max(1, int((3 * (1 - math.exp(-edge_count[(frm, to)] / max_count))))),  # Exponential scaling
             }
         }
         for frm, to in edges_set
@@ -1345,8 +1810,26 @@ async def get_config(request):
     })
 
 
+async def log_request_middleware(app, handler):
+    async def middleware_handler(request):
+        if request.path not in ("/events", "/api/traceroutes", "/chat_newer", "/firehose_newer"):  # Skip logging for /events and the polling of /tracelive, /chat and /firehose
+            print(f"{datetime.datetime.now():%F %T} Requested Page: {request.path}")  # Log other requests
+        response = await handler(request)
+        # Compress finished text responses (not streams like /events); aiohttp only does it
+        # when the browser sent Accept-Encoding
+        if (isinstance(response, web.Response) and response.body is not None
+                and len(response.body) > 1024
+                and response.content_type in COMPRESSIBLE):
+            response.enable_compression()
+        return response
+    return middleware_handler
+
+COMPRESSIBLE = {"text/html", "text/plain", "text/css", "application/json",
+                "application/javascript", "image/svg+xml"}
+
 async def run_server():
-    app = web.Application()
+    #app = web.Application()
+    app = web.Application(middlewares=[log_request_middleware])
     app.add_routes(routes)
     runner = web.AppRunner(app)
     await runner.setup()

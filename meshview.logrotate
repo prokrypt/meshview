@@ -1,0 +1,11 @@
+# meshview logs (written by tee -a from /etc/rc.local, so copytruncate)
+/root/meshview/main.log /root/meshview/db.log /root/meshview/cleanup.log {
+	weekly
+	maxsize 20M
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+}

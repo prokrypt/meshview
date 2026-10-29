@@ -1,0 +1,21 @@
+<script>
+    // Lazy-loading lists (/chat, /firehose): an element marked data-lazy-more gets the htmx event
+    // "near" once it is within two screen heights below the viewport, so the next page is already
+    // there when the reader gets to the end.
+    (() => {
+        const io = new IntersectionObserver(entries => {
+            for (const e of entries) {
+                if (e.isIntersecting) {
+                    io.unobserve(e.target);
+                    htmx.trigger(e.target, "near");
+                }
+            }
+        }, {rootMargin: "0px 0px 200% 0px"});
+        const watch = root => {
+            if (root.matches && root.matches("[data-lazy-more]")) io.observe(root);
+            if (root.querySelectorAll) root.querySelectorAll("[data-lazy-more]").forEach(el => io.observe(el));
+        };
+        document.addEventListener("htmx:load", e => watch(e.detail.elt));
+        document.addEventListener("DOMContentLoaded", () => watch(document.body));
+    })();
+</script>

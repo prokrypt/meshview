@@ -1,216 +1,359 @@
 {% extends "base.html" %}
 
 {% block css %}
-table {
-    width: 80%;
-    border-collapse: collapse;
-    margin-top: 1em;
-    margin-left: auto;
-    margin-right: auto;
+#nodes {
+    --surface: #1a1d21;
+    --line: #2c3036;
+    --muted: #8b929a;
+    --unlit: #3a3f45;
+    --lit: #e3a948;
+    width: 95%;
+    max-width: 1400px;
+    margin: 0 auto;
+    font-variant-numeric: tabular-nums;
 }
 
-
-th, td {
-    padding: 10px;
-    border: 1px solid #333;
-    text-align: left;
-}
-
-th {
-    background-color: #1f1f1f;
-    color: white;
-    cursor: pointer;
-}
-
-tr:nth-child(even) {
-    background-color: #181818;
-}
-
-tr:nth-child(odd) {
-    background-color: #222;
-}
-
-.search-container {
+#nodes .controls {
     display: flex;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 10px;
-    width: 80%;
-    margin-left: auto;
-    margin-right: auto;
 }
 
-.search, .filter-role, .filter-channel, .filter-hw_model, .export-btn {
-    padding: 8px;
-    border: 1px solid #333;
+#nodes .controls input,
+#nodes .controls select,
+#nodes .controls button {
+    padding: 6px 10px;
+    border: 1px solid var(--line);
     border-radius: 4px;
+    background: var(--surface);
+    color: inherit;
 }
 
-.filter-role, .filter-channel, .filter-hw_model {
+#nodes .controls input {
+    flex: 1 1 220px;
+}
+
+#nodes .controls button {
     cursor: pointer;
 }
 
-.export-btn {
-    background: #28a745;
-    color: white;
-    border: none;
+#nodes .summary {
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+
+#nodes .scroll {
+    overflow-x: auto;
+}
+
+#nodes table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+}
+
+#nodes th,
+#nodes td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: baseline;
+}
+
+#nodes th {
+    white-space: nowrap;
+}
+
+#nodes td a {
+    text-decoration: none;
+}
+
+#nodes td a:hover {
+    text-decoration: underline;
+}
+
+#nodes th button {
+    all: unset;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+#nodes th button:focus-visible,
+#nodes .controls :focus-visible,
+#nodes a:focus-visible {
+    outline: 2px solid var(--lit);
+    outline-offset: 2px;
+}
+
+#nodes th[aria-sort="ascending"] button::after { content: " \25B4"; }
+#nodes th[aria-sort="descending"] button::after { content: " \25BE"; }
+
+#nodes .muted { color: var(--muted); }
+#nodes .short { color: var(--muted); margin-left: 6px; }
+#nodes td.heard,
+#nodes td.c-pos { white-space: nowrap; }
+
+/* Last heard as signal bars: four bars, lit by how recently the node was heard */
+#nodes .bars {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 12px;
+    margin-right: 6px;
+    vertical-align: -1px;
+}
+
+#nodes .bars i {
+    width: 3px;
+    background: var(--unlit);
+}
+
+#nodes .bars i:nth-child(1) { height: 25%; }
+#nodes .bars i:nth-child(2) { height: 50%; }
+#nodes .bars i:nth-child(3) { height: 75%; }
+#nodes .bars i:nth-child(4) { height: 100%; }
+
+#nodes .s1 i:nth-child(-n+1),
+#nodes .s2 i:nth-child(-n+2),
+#nodes .s3 i:nth-child(-n+3),
+#nodes .s4 i { background: var(--lit); }
+
+#nodes .more {
+    display: block;
+    margin: 12px auto 0;
+    padding: 6px 16px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    color: inherit;
     cursor: pointer;
 }
 
-.export-btn:hover {
-    background: #218838;
+@media (max-width: 800px) {
+    #nodes .c-hw, #nodes .c-fw, #nodes .c-pos { display: none; }
 }
 
-.count-container {
-    margin-bottom: 10px;
-    font-weight: bold;
-    color: white;
-    width: 80%;
-    margin-left: auto;
-    margin-right: auto;
-
+@media (max-width: 520px) {
+    #nodes .c-role { display: none; }
 }
 {% endblock %}
 
 {% block body %}
-    <div id="node-list">
-        <div class="search-container">
-            <input class="search" placeholder="Search nodes..." />
-
-            <!-- Filter by Role -->
-            <select class="filter-role" onchange="applyFilters()">
-                <option value="">Filter by Role</option>
-                {% for node in nodes|groupby('role') %}
-                    <option value="{{ node.grouper }}">{{ node.grouper }}</option>
-                {% endfor %}
-            </select>
-
-            <!-- Filter by Channel -->
-            <select class="filter-channel" onchange="applyFilters()">
-                <option value="">Filter by Channel</option>
-                {% for node in nodes|groupby('channel') %}
-                    <option value="{{ node.grouper }}">{{ node.grouper }}</option>
-                {% endfor %}
-            </select>
-
-            <!-- Filter by HW Model -->
-            <select class="filter-hw_model" onchange="applyFilters()">
-                <option value="">Filter by HW Model</option>
-                {% for node in nodes|groupby('hw_model') %}
-                    <option value="{{ node.grouper }}">{{ node.grouper }}</option>
-                {% endfor %}
-            </select>
-
-            <button class="export-btn" onclick="exportToCSV()">Export to CSV</button>
-        </div>
-
-        <!-- Count Display -->
-        <div class="count-container">Showing <span id="node-count-value">0</span> nodes</div>
-
-        {% if nodes %}
-            <table id="node-table">
-                <thead>
-                    <tr>
-                        <th class="sort" data-sort="long_name">Long Name</th>
-                        <th class="sort" data-sort="short_name">Short Name</th>
-                        <th class="sort" data-sort="hw_model">HW Model</th>
-                        <th class="sort" data-sort="firmware">Firmware</th>
-                        <th class="sort" data-sort="role">Role</th>
-                        <th class="sort" data-sort="last_lat">Last Latitude</th>
-                        <th class="sort" data-sort="last_long">Last Longitude</th>
-                        <th class="sort" data-sort="channel">Channel</th>
-                        <th class="sort" data-sort="last_update" data-order="desc">Last Update</th>
-                    </tr>
-                </thead>
-                <tbody class="list">
-                    {% for node in nodes %}
-                        <tr>
-                            <td class="long_name"> <a href="/packet_list/{{ node.node_id }}">{{ node.long_name }}</a></td>
-                            <td class="short_name">{{ node.short_name }}</td>
-                            <td class="hw_model">{{ node.hw_model if node.hw_model else "N/A" }}</td>
-                            <td class="firmware">{{ node.firmware }}</td>
-                            <td class="role">{{ node.role if node.role else "N/A" }}</td>
-                            <td class="last_lat">{{ "{:.7f}".format(node.last_lat / 10**7) if node.last_lat else "N/A" }}</td>
-                            <td class="last_long">{{ "{:.7f}".format(node.last_long / 10**7) if node.last_long else "N/A" }}</td>
-                            <td class="channel">{{ node.channel if node.channel else "N/A" }}</td>
-                            <td class="last_update" data-timestamp="{{ node.last_update.timestamp() if node.last_update else 0 }}">
-                                {{ node.last_update.strftime('%-I:%M:%S %p - %m-%d-%Y') if node.last_update else "N/A" }}
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <p>No nodes found.</p>
-        {% endif %}
+<div id="nodes">
+    <div class="controls">
+        <input id="q" type="search" placeholder="Search name, short name, id, hardware" aria-label="Search nodes">
+        <select id="f-role" aria-label="Role"><option value="">All roles</option></select>
+        <select id="f-channel" aria-label="Channel"><option value="">All channels</option></select>
+        <select id="f-hw" aria-label="Hardware"><option value="">All hardware</option></select>
+        <select id="f-heard" aria-label="Last heard">
+            <option value="0">Heard any time</option>
+            <option value="1">Heard in the last hour</option>
+            <option value="24">Heard in the last 24h</option>
+            <option value="168">Heard in the last 7 days</option>
+            <option value="720">Heard in the last 30 days</option>
+        </select>
+        <button id="export" type="button">Export CSV</button>
     </div>
+    <div class="summary" id="summary" aria-live="polite"></div>
+    <div class="scroll">
+    <table>
+        <thead>
+            <tr>
+                <th data-key="10"><button type="button">Last heard</button></th>
+                <th data-key="2"><button type="button">Name</button></th>
+                <th data-key="4" class="c-hw"><button type="button">Hardware</button></th>
+                <th data-key="5" class="c-role"><button type="button">Role</button></th>
+                <th data-key="6"><button type="button">Channel</button></th>
+                <th class="c-pos">Position</th>
+                <th data-key="7" class="c-fw"><button type="button">Firmware</button></th>
+            </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+    </table>
+    </div>
+    <button id="more" class="more" type="button" hidden></button>
+</div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/list.js/2.3.1/list.min.js"></script>
-    <script>
-        var nodeList;
+<script id="node-data" type="application/json">{{ rows|tojson }}</script>
+<script>
+(function () {
+    // Row layout from web.py: node_id, id, long_name, short_name, hw_model, role, channel,
+    // firmware, lat, lon, last heard (epoch s)
+    var NODE_ID = 0, ID = 1, LONG = 2, SHORT = 3, HW = 4, ROLE = 5, CHANNEL = 6, FW = 7, LAT = 8, LON = 9, HEARD = 10;
+    var PAGE = 100;
 
-        document.addEventListener("DOMContentLoaded", function () {
-            var options = {
-                valueNames: [
-                    "long_name", "short_name", "hw_model", "firmware", "role",
-                    "last_lat", "last_long", "channel", { name: "last_update", attr: "data-timestamp" }
-                ]
-            };
-            nodeList = new List("node-list", options);
+    var all = JSON.parse(document.getElementById("node-data").textContent);
+    all.forEach(function (r) {
+        r.search = [r[LONG], r[SHORT], r[ID], r[HW]].join(" ").toLowerCase();
+    });
 
-            updateCount(); // Update count on load
+    var el = function (id) { return document.getElementById(id); };
+    var q = el("q"), fRole = el("f-role"), fChannel = el("f-channel"), fHw = el("f-hw"), fHeard = el("f-heard");
+    var tbody = el("rows"), more = el("more"), summary = el("summary");
+    var sortKey = HEARD, sortDir = -1, shown = PAGE, matching = [];
 
-            nodeList.on("updated", function () {
-                updateCount(); // Update count when search or sort changes
-            });
+    function fillSelect(select, col) {
+        var seen = {};
+        all.forEach(function (r) { if (r[col]) seen[r[col]] = 1; });
+        Object.keys(seen).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (v) {
+            select.add(new Option(v, v));
         });
+    }
+    fillSelect(fRole, ROLE);
+    fillSelect(fChannel, CHANNEL);
+    fillSelect(fHw, HW);
 
-        function applyFilters() {
-            var selectedRole = document.querySelector(".filter-role").value;
-            var selectedChannel = document.querySelector(".filter-channel").value;
-            var selectedHWModel = document.querySelector(".filter-hw_model").value;
+    // Filters can come from the URL (?role=…&channel=…&hw_model=…&heard=…&q=…) and are kept there
+    var params = new URLSearchParams(location.search);
+    q.value = params.get("q") || "";
+    fRole.value = (params.get("role") || "").toUpperCase();
+    fChannel.value = params.get("channel") || "";
+    fHw.value = params.get("hw_model") || "";
+    fHeard.value = params.get("heard") || "0";
 
-            nodeList.filter(function (item) {
-                var matchesRole = selectedRole === "" || item.values().role === selectedRole;
-                var matchesChannel = selectedChannel === "" || item.values().channel === selectedChannel;
-                var matchesHWModel = selectedHWModel === "" || item.values().hw_model === selectedHWModel;
-                return matchesRole && matchesChannel && matchesHWModel;
-            });
+    function esc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+        });
+    }
 
-            updateCount(); // Update the count after filtering
+    function ago(ts, now) {
+        if (!ts) return "never";
+        var s = Math.max(0, now - ts);
+        if (s < 60) return "just now";
+        if (s < 3600) return Math.floor(s / 60) + "m ago";
+        if (s < 86400) return Math.floor(s / 3600) + "h ago";
+        return Math.floor(s / 86400) + "d ago";
+    }
+
+    function strength(ts, now) {
+        var s = now - ts;
+        return !ts ? 0 : s < 3600 ? 4 : s < 86400 ? 3 : s < 604800 ? 2 : s < 2592000 ? 1 : 0;
+    }
+
+    function stamp(ts) {
+        return ts ? new Date(ts * 1000).toLocaleString() : "";
+    }
+
+    function compare(a, b) {
+        var x = a[sortKey], y = b[sortKey];
+        if (x == null || x === "") return 1;
+        if (y == null || y === "") return -1;
+        var c = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
+        return c * sortDir;
+    }
+
+    function update() {
+        var text = q.value.trim().toLowerCase();
+        var role = fRole.value, channel = fChannel.value, hw = fHw.value;
+        var since = Number(fHeard.value) ? Date.now() / 1000 - Number(fHeard.value) * 3600 : 0;
+        matching = all.filter(function (r) {
+            return (!role || r[ROLE] === role) && (!channel || r[CHANNEL] === channel) &&
+                (!hw || r[HW] === hw) && r[HEARD] >= since &&
+                (!text || r.search.indexOf(text) !== -1);
+        });
+        matching.sort(compare);
+        shown = PAGE;
+        draw();
+
+        var p = new URLSearchParams();
+        if (text) p.set("q", q.value.trim());
+        if (role) p.set("role", role);
+        if (channel) p.set("channel", channel);
+        if (hw) p.set("hw_model", hw);
+        if (fHeard.value !== "0") p.set("heard", fHeard.value);
+        var qs = p.toString();
+        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : ""));
+    }
+
+    function draw() {
+        var now = Date.now() / 1000;
+        var html = matching.slice(0, shown).map(function (r) {
+            var name = esc(r[LONG] || r[ID]);
+            // nodes with a garbled id have no node_id, so there is no packet list to link to
+            if (r[NODE_ID] != null) name = '<a href="/packet_list/' + r[NODE_ID] + '">' + name + "</a>";
+            var pos = r[LAT] != null && r[LON] != null
+                ? '<a href="https://www.openstreetmap.org/?mlat=' + r[LAT] + "&amp;mlon=" + r[LON] + '&amp;zoom=15" target="_blank">' + r[LAT] + ", " + r[LON] + "</a>"
+                : '<span class="muted">none</span>';
+            return "<tr>" +
+                '<td class="heard" title="' + esc(stamp(r[HEARD])) + '"><span class="bars s' + strength(r[HEARD], now) + '"><i></i><i></i><i></i><i></i></span>' + ago(r[HEARD], now) + "</td>" +
+                "<td>" + name + (r[SHORT] ? '<span class="short">' + esc(r[SHORT]) + "</span>" : "") + "</td>" +
+                '<td class="c-hw">' + esc(r[HW]) + "</td>" +
+                '<td class="c-role">' + esc(r[ROLE]) + "</td>" +
+                "<td>" + esc(r[CHANNEL]) + "</td>" +
+                '<td class="c-pos">' + pos + "</td>" +
+                '<td class="c-fw">' + (r[FW] ? esc(r[FW]) : '<span class="muted">unknown</span>') + "</td>" +
+                "</tr>";
+        }).join("");
+        tbody.innerHTML = html || '<tr><td colspan="7" class="muted">No nodes match. Clear the search or pick another filter.</td></tr>';
+
+        var visible = Math.min(shown, matching.length);
+        summary.textContent = matching.length === all.length
+            ? "Showing " + visible + " of " + all.length + " nodes"
+            : "Showing " + visible + " of " + matching.length + " matching nodes (" + all.length + " total)";
+        var left = matching.length - shown;
+        more.hidden = left <= 0;
+        more.textContent = "Show " + Math.min(PAGE, left) + " more";
+
+        document.querySelectorAll("#nodes th[data-key]").forEach(function (th) {
+            if (Number(th.dataset.key) === sortKey) th.setAttribute("aria-sort", sortDir > 0 ? "ascending" : "descending");
+            else th.removeAttribute("aria-sort");
+        });
+    }
+
+    var timer;
+    q.addEventListener("input", function () {
+        clearTimeout(timer);
+        timer = setTimeout(update, 200);
+    });
+    [fRole, fChannel, fHw, fHeard].forEach(function (s) { s.addEventListener("change", update); });
+
+    more.addEventListener("click", function () {
+        shown += PAGE;
+        draw();
+    });
+
+    document.querySelectorAll("#nodes th[data-key] button").forEach(function (b) {
+        b.addEventListener("click", function () {
+            var key = Number(b.parentNode.dataset.key);
+            // last heard starts newest first, text columns A to Z
+            sortDir = key === sortKey ? -sortDir : (key === HEARD ? -1 : 1);
+            sortKey = key;
+            matching.sort(compare);
+            shown = PAGE;
+            draw();
+        });
+    });
+
+    // Quote every field so commas, quotes and line breaks in names don't split columns
+    function csvField(v) {
+        return '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+    }
+
+    el("export").addEventListener("click", function () {
+        var lines = [["Node ID", "Long name", "Short name", "Hardware", "Role", "Channel", "Firmware", "Latitude", "Longitude", "Last heard"].map(csvField).join(",")];
+        matching.forEach(function (r) {
+            lines.push([r[ID], r[LONG], r[SHORT], r[HW], r[ROLE], r[CHANNEL], r[FW], r[LAT], r[LON], stamp(r[HEARD])].map(csvField).join(","));
+        });
+        // BOM so Excel reads UTF-8 names right
+        var blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "nodes_list.csv";
+        a.click();
+    });
+
+    // "/" jumps to the search box
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "/" && document.activeElement !== q) {
+            e.preventDefault();
+            q.focus();
+            q.select();
         }
+    });
 
-        function updateCount() {
-            var visibleRows = document.querySelectorAll("#node-table tbody tr:not([style*='display: none'])").length;
-            document.getElementById("node-count-value").innerText = visibleRows;
-        }
-
-        function exportToCSV() {
-            var table = document.getElementById("node-table");
-            var rows = table.querySelectorAll("tr");
-            var csvContent = [];
-
-            // Extract header row
-            var headers = [];
-            table.querySelectorAll("th").forEach(th => headers.push(th.innerText));
-            csvContent.push(headers.join(","));
-
-            // Extract table rows
-            rows.forEach(row => {
-                var cells = row.querySelectorAll("td");
-                if (cells.length > 0) {
-                    var rowData = [];
-                    cells.forEach(cell => rowData.push(cell.innerText));
-                    csvContent.push(rowData.join(","));
-                }
-            });
-
-            // Create CSV file and trigger download
-            var csvString = csvContent.join("\n");
-            var blob = new Blob([csvString], { type: "text/csv" });
-            var a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = "nodes_list.csv";
-            a.click();
-        }
-    </script>
+    update();
+})();
+</script>
 {% endblock %}

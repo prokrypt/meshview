@@ -25,7 +25,11 @@ class Node(Base):
 
 class Packet(Base):
     __tablename__ = "packet"
+    # id is meshview's own key. Meshtastic packet ids (mesh_id) are only unique per sender, so a packet
+    # is (from_node_id, mesh_id), unique index idx_packet_from_node_mesh_id. Rows from before
+    # 2026-10-28 have id = mesh_id; newer ones get ids from 2**32 up (mqtt_database.next_packet_id).
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    mesh_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
     portnum: Mapped[int] = mapped_column(nullable=True)
     from_node_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
     from_node: Mapped["Node"] = relationship(

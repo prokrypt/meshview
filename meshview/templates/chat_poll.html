@@ -1,0 +1,3 @@
+{# Replaced by itself (with a newer cursor) plus any new messages; skipped while the tab is hidden #}
+<span hx-get="/chat_newer?after={{ newest | urlencode }}&channel={{ channel | urlencode }}"
+      hx-trigger="every {{ poll_s }}s [!document.hidden]" hx-swap="outerHTML" hx-indicator="#chat-busy"></span>

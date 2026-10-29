@@ -48,58 +48,81 @@
 
 {% endblock %}
 
+{% set total_packets = traffic | sum(attribute='packet_count') %}
+{% set port_labels = {
+    1: "Text message",
+    3: "Position",
+    4: "Nodeinfo",
+    5: "Routing",
+    6: "Admin",
+    8: "Waypoint",
+    34: "Pax counter ඞ",
+    35: "Store&forward ඞඞ",
+    65: "Store&forward ඞ",
+    66: "Range test ඞ",
+    67: "Telemetry",
+    70: "Traceroute",
+    71: "Neighborinfo",
+    72: "ATAK",
+    73: "Map report",
+    0: "Unknown/Admin"
+} %}
+
 {% block body %}
     <section>
-        <h2 class="table-title">{{ traffic[0].long_name }} (last 24 hours)</h2>
-        <table class="traffic-table">
-            <thead>
-                <tr>
-                    <th>Port Number</th>
-                    <th>Packet Count</th>
+    <h2 class="table-title"><a href="/packet_list/{{ node_id }}">{{ traffic[0].long_name }}</a> (last {{ hours }} hour{{ 's' if hours != 1 else '' }})</h2>
+    <table class="traffic-table">
+        <thead>
+            <tr>
+                <th>Packet type</th>
+                <th>pkts</th>
+                <th>%/{{ total_packets }}</th>
+				<th>pkts/hr</th>
+				<th>minutes/pkt</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for port in traffic %}
+                <tr class="traffic">
+                    <td>{{ port_labels.get(port.portnum, "UNKNOWN: " ~ port.portnum) }}</td>
+                    <td>{{ port.packet_count }}</td>
+                    <td>
+                        {% if total_packets > 0 %}
+                            {{ '%d' | format((port.packet_count *100 / total_packets) | round) }}%
+                        {% else %}
+                            0.00%
+                        {% endif %}
+                    </td>
+					<td>
+						{% if port.packet_count > 1 %}
+						    {{ '%.2f' | format((port.packet_count / hours)) }}
+						{% else %}
+						    ?  
+						{% endif %}
+					</td>
+					<td>
+						{% if port.packet_count > 1 %}
+						    {% set minutes = (hours * 60 / port.packet_count) %}
+						    {% if minutes < 1 %}
+						        {{ '%d SECONDS!!1' | format((minutes * 60) | round) }}
+						    {% else %}
+						        {{ '%d' | format(minutes | round) }}
+						    {% endif %}
+						{% else %}
+						    ?
+						{% endif %}
+					</td>
                 </tr>
-            </thead>
-            <tbody>
-                {% for port in traffic %}
-                    <tr class="traffic">
-                        <td>
-                            {% if port.portnum == 1 %}
-                                TEXT_MESSAGE_APP
-                            {% elif port.portnum == 3 %}
-                                POSITION_APP
-                            {% elif port.portnum == 4 %}
-                                NODEINFO_APP
-                            {% elif port.portnum == 5 %}
-                                ROUTING_APP
-                            {% elif port.portnum == 67 %}
-                                TELEMETRY_APP
-                            {% elif port.portnum == 70 %}
-                                TRACEROUTE_APP
-                            {% elif port.portnum == 71 %}
-                                NEIGHBORINFO_APP
-                            {% elif port.portnum == 73 %}
-                                MAP_REPORT_APP
-                            {% elif port.portnum == 0 %}
-                                UNKNOWN_APP
-                            {% elif port.portnum == 0 %}
-                                UNKNOWN_APP
-                            {% elif port.portnum == 0 %}
-                                UNKNOWN_APP
-                            {% else %}
-                                {{ port.portnum }}
-                            {% endif %}
-                        </td>
-                        <td>{{ port.packet_count }}</td>
-                    </tr>
-                {% else %}
-                    <tr>
-                        <td colspan="2">No traffic data available for this node.</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </section>
+            {% else %}
+                <tr>
+                    <td colspan="3">No traffic data available for this node.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
 
     <footer class="footer">
-        <a href="/top">Back to Top Nodes</a>
+        <a href="/top/{{hours}}">Back to Top Nodes</a>
     </footer>
 {% endblock %}

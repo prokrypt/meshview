@@ -1,0 +1,5 @@
+{% if more %}
+<span class="d-block text-center text-secondary py-3" data-lazy-more
+      hx-get="/firehose_older?before={{ oldest | urlencode }}&portnum={{ portnum or '' }}"
+      hx-trigger="near" hx-swap="outerHTML" hx-indicator="#firehose-busy">Loading older packets…</span>
+{% endif %}

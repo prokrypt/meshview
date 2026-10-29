@@ -1,0 +1,2 @@
+# meshview: delete packets older than 90 days, see /root/meshview/cleanup.py
+17 4 * * * root /usr/bin/python3 /root/meshview/cleanup.py >> /root/meshview/cleanup.log 2>&1

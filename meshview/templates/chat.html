@@ -21,17 +21,17 @@
 
 
 {% block body %}
-<script>
-    setTimeout(function() {
-        location.reload();
-    }, 30000); // 10 seconds
-</script>
-
+    {# New messages are fetched every few seconds and added at the top (chat_poll.html); older
+       ones load when the end of the list scrolls into view (chat_more.html) #}
     <div class="container" >
+        {% include 'chat_poll.html' %}
         {% for packet in packets %}
         {% include 'chat_packet.html' %}
         {% else %}
         No packets found.
         {% endfor %}
+        {% include 'chat_more.html' %}
     </div>
+    <span id="chat-busy"></span>
+    {% include 'lazy_preload.html' %}
 {% endblock %}

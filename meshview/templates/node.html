@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 
+{% block head %}
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+{% endblock %}
+
 {% block css %}
     /* Styles for the node info card */
     #node_info {
@@ -30,12 +36,7 @@
 {% include "search_form.html" %}
 
 <div id="node" class="container text-center">
-    <div class="container"
-         {% if node %}
-         hx-ext="sse"
-         sse-connect="/events?node_id={{node_id}}{% if portnum %}&portnum={{portnum}}{% endif %}"
-         {% endif %}
-    >
+    <div class="container">
         <div class="row">
             <div class="col mb-3">
                 <!-- Node Information Card -->
@@ -138,13 +139,13 @@
         fillOpacity: 0.5
     }).addTo(markers) // Add to feature group
       .bindTooltip(`
-        <b>{{node.long_name}}</b><br/>
-        <b>Short:</b> {{node.short_name}}<br/>
-        <b>Channel:</b> {{node.channel}}<br/>
-        <b>Hardware:</b> {{node.hw_model}}<br/>
-        <b>Role:</b> {{node.role}}<br/>
-        <b>Firmware:</b> {{node.firmware}}<br/>
-        <b>Coordinates:</b> [{{node.last_lat}} , {{node.last_long}}]
+        <b>{{ node.long_name|js_html }}</b><br/>
+        <b>Short:</b> {{ node.short_name|js_html }}<br/>
+        <b>Channel:</b> {{ node.channel|js_html }}<br/>
+        <b>Hardware:</b> {{ node.hw_model|js_html }}<br/>
+        <b>Role:</b> {{ node.role|js_html }}<br/>
+        <b>Firmware:</b> {{ node.firmware|js_html }}<br/>
+        <b>Coordinates:</b> [{{ node.last_lat|js_html }} , {{ node.last_long|js_html }}]
       `, {permanent: false, direction: 'top', opacity: 0.9});
 
     // Function to calculate distance and convert to miles
@@ -169,8 +170,8 @@
             fillOpacity: 0.5
         }).addTo(markers) // Add to feature group
           .bindTooltip(`
-            <b>Neighbour: [{{n.short_name}}] {{n.long_name}}</b> <br/>
-            <b>SNR:</b> {{n.snr}} <br/>
+            <b>Neighbour: [{{ n.short_name|js_html }}] {{ n.long_name|js_html }}</b> <br/>
+            <b>SNR:</b> {{ n.snr|js_html }} <br/>
             <b>Distance:</b> ${distanceMiles} miles <br/>
         `, {permanent: false, direction: 'top', opacity: 0.9});
 

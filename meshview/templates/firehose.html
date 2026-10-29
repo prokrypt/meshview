@@ -3,65 +3,24 @@
 {% block body %}
 
 <script>
-    let refreshInterval;
+    // New packets are fetched every few seconds and added at the top (firehose_poll.html) unless
+    // paused; older ones load before the end of the list is reached (firehose_more.html)
+    window.firehosePaused = false;
 
-    function updateURLWithPort() {
-        let selectedPort = document.querySelector('select[name="portnum"]').value;
-        let url = new URL(window.location.href);
-        url.searchParams.set('portnum', selectedPort);
-
-        // Save scroll position before refreshing
-        localStorage.setItem("scrollPosition", window.scrollY);
-
-        window.location.href = url.toString();
-    }
-
-    function startAutoRefresh() {
-        refreshInterval = setInterval(updateURLWithPort, 5000);
-        localStorage.setItem("autoRefresh", "true");
-        updateButtonState(true);
-    }
-
-    function stopAutoRefresh() {
-        clearInterval(refreshInterval);
-        localStorage.setItem("autoRefresh", "false");
-        updateButtonState(false);
-    }
-
-    function toggleAutoRefresh() {
-        let isEnabled = localStorage.getItem("autoRefresh") === "true";
-        if (isEnabled) {
-            stopAutoRefresh();
-        } else {
-            startAutoRefresh();
-        }
-    }
-
-    function updateButtonState(isEnabled) {
-        let button = document.getElementById("auto-refresh-button");
-        button.innerText = isEnabled ? "Disable Auto-Refresh" : "Enable Auto-Refresh";
-    }
-
-    function restoreScrollPosition() {
-        let scrollPosition = localStorage.getItem("scrollPosition");
-        if (scrollPosition !== null) {
-            window.scrollTo(0, parseInt(scrollPosition, 10));
-        }
+    function toggleFirehosePause() {
+        window.firehosePaused = !window.firehosePaused;
+        document.getElementById("pause-button").innerText = window.firehosePaused ? "Resume" : "Pause";
+        // Resuming: catch up right away instead of at the next poll
+        if (!window.firehosePaused) htmx.trigger(document.getElementById("firehose-poll"), "catchup");
     }
 
     document.addEventListener("DOMContentLoaded", function () {
-        document.querySelector('select[name="portnum"]').addEventListener('change', updateURLWithPort);
-        document.getElementById("auto-refresh-button").addEventListener('click', toggleAutoRefresh);
-
-        // Restore auto-refresh state
-        let isEnabled = localStorage.getItem("autoRefresh") === "true";
-        updateButtonState(isEnabled);
-        if (isEnabled) {
-            startAutoRefresh();
-        }
-
-        // Restore scroll position
-        restoreScrollPosition();
+        document.querySelector('select[name="portnum"]').addEventListener('change', function () {
+            let url = new URL(window.location.href);
+            url.searchParams.set('portnum', this.value);
+            window.location.href = url.toString();
+        });
+        document.getElementById("pause-button").addEventListener('click', toggleFirehosePause);
     });
 </script>
 
@@ -82,17 +41,21 @@
             <option value="{{ value }}" {% if value == portnum %}selected{% endif %}>{{ name }}</option>
             {% endfor %}
         </select>
-        <button type="button" id="auto-refresh-button" class="col-2 m-2 btn btn-primary">Enable Auto-Refresh</button>
+        <button type="button" id="pause-button" class="col-2 m-2 btn btn-primary">Pause</button>
     </form>
     <div class="row">
         <div class="col-xs" id="packet_list">
+            {% include 'firehose_poll.html' %}
             {% for packet in packets %}
                 {% include 'packet.html' %}
             {% else %}
                 No packets found.
             {% endfor %}
+            {% include 'firehose_more.html' %}
         </div>
     </div>
 </div>
+<span id="firehose-busy"></span>
+{% include 'lazy_preload.html' %}
 
 {% endblock %}
